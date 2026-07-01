@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{c8f9f3df-50cb-43fc-a7d8-d7f7e52455af}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{ac0d9154-aef3-4f8c-a7a3-a2b99bafac03}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Device.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="Driver.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="VhfDevice.c"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Device.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Driver.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Trace.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="VhfDevice.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+</Project>

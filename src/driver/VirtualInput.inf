@@ -1,0 +1,22 @@
+﻿; Windows VHID Stack development INF placeholder.
+; Install/load is not approved by the current source-skeleton task.
+;
+; This INF is intentionally incomplete until the descriptor/device identity phase.
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=HIDClass
+ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider=%ManufacturerName%
+DriverVer=07/01/2026,0.0.1.0
+CatalogFile=VirtualInput.cat
+PnpLockdown=1
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+; Hardware IDs are intentionally not assigned in the source-skeleton phase.
+
+[Strings]
+ManufacturerName="Windows VHID Stack"

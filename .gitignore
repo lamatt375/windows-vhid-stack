@@ -1,0 +1,44 @@
+﻿# Visual Studio / MSBuild
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+ipch/
+
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+ARM64/
+*.log
+*.tlog
+*.lastbuildstate
+
+# Driver build artifacts
+*.sys
+*.cat
+*.cer
+*.pfx
+*.pvk
+*.inf2cat.log
+*.vcxproj.user
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.tmh
+
+# Packages and archives
+*.zip
+*.7z
+*.msi
+*.cab
+
+# Local VM/test output
+outputs/*
+!outputs/README.md

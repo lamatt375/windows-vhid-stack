@@ -13,7 +13,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{B90F1FD4-5E6E-4F26-9B93-9C0FD32929C5}</ProjectGuid>
     <RootNamespace>WindowsVhidStack</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
@@ -23,6 +23,15 @@
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <VhidWdkRoot Condition="'$(WDKContentRoot)' != ''">$(WDKContentRoot)</VhidWdkRoot>
+    <VhidWdkRoot Condition="'$(VhidWdkRoot)' == '' and '$(WindowsSdkDir)' != ''">$(WindowsSdkDir)</VhidWdkRoot>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(VhidWdkRoot)' != ''">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(VhidWdkRoot)Include\$(WindowsTargetPlatformVersion)\km;$(VhidWdkRoot)Include\$(WindowsTargetPlatformVersion)\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Device.h" />
     <ClInclude Include="Driver.h" />

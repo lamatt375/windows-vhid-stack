@@ -51,7 +51,7 @@
     <ClCompile Include="VhfDevice.c" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="VirtualInput.inf" />
+    <Inf Include="VirtualInput.inf" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

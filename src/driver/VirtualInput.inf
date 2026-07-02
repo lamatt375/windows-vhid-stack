@@ -1,22 +1,55 @@
-﻿; Windows VHID Stack development INF placeholder.
-; Install/load is not approved by the current source-skeleton task.
-;
-; This INF is intentionally incomplete until the descriptor/device identity phase.
+; Windows VHID Stack root-enumerated package metadata.
+; This file defines package identity only; it does not approve install/load.
 
 [Version]
 Signature="$WINDOWS NT$"
 Class=HIDClass
 ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
 Provider=%ManufacturerName%
-DriverVer=07/01/2026,0.0.1.0
+DriverVer=07/02/2026,0.0.2.0
 CatalogFile=VirtualInput.cat
 PnpLockdown=1
 
 [Manufacturer]
-%ManufacturerName%=Standard,NT$ARCH$
+%ManufacturerName%=Standard,NTamd64
 
-[Standard.NT$ARCH$]
-; Hardware IDs are intentionally not assigned in the source-skeleton phase.
+[Standard.NTamd64]
+%DeviceName%=VirtualInput_Device,ROOT\WindowsVhidStackVirtualInput
+
+[DestinationDirs]
+DefaultDestDir=13
+VirtualInput_CopyFiles=13
+
+[SourceDisksNames]
+1=%DiskName%,,,
+
+[SourceDisksFiles]
+VirtualInput.sys=1
+
+[VirtualInput_Device.NT]
+CopyFiles=VirtualInput_CopyFiles
+
+[VirtualInput_CopyFiles]
+VirtualInput.sys
+
+[VirtualInput_Device.NT.Services]
+AddService=VirtualInput,0x00000002,VirtualInput_Service
+
+[VirtualInput_Service]
+DisplayName=%ServiceName%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\VirtualInput.sys
+
+[VirtualInput_Device.NT.Wdf]
+KmdfService=VirtualInput,VirtualInput_Wdf
+
+[VirtualInput_Wdf]
+KmdfLibraryVersion=$KMDFVERSION$
 
 [Strings]
 ManufacturerName="Windows VHID Stack"
+DeviceName="Windows VHID Stack Virtual HID Device"
+ServiceName="Windows VHID Stack Virtual HID Service"
+DiskName="Windows VHID Stack Driver Package"

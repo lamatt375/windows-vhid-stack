@@ -31,6 +31,10 @@
     <ClCompile>
       <AdditionalIncludeDirectories>$(VhidWdkRoot)Include\$(WindowsTargetPlatformVersion)\km;$(VhidWdkRoot)Include\$(WindowsTargetPlatformVersion)\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <Link>
+      <AdditionalDependencies>VhfKm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(VhidWdkRoot)Lib\$(WindowsTargetPlatformVersion)\km\$(Platform);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
   </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <SignMode>Off</SignMode>

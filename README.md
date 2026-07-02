@@ -2,7 +2,7 @@
 
 Windows VHID Stack is an initial Windows KMDF/VHF virtual HID driver source skeleton for virtual mouse and keyboard input.
 
-Current status: source skeleton only. This repository is not ready to build, sign, install, load, or generate input.
+Current status: source skeleton with minimal VHF lifecycle and HID descriptor. This repository is not ready to sign, install, load, or generate input.
 
 ## Safety Boundary
 
@@ -15,7 +15,7 @@ Current status: source skeleton only. This repository is not ready to build, sig
 ## Repository Layout
 
 ```text
-src/driver/           No-report KMDF/VHF driver skeleton
+src/driver/           No-report KMDF/VHF driver skeleton with descriptor
 src/shared/           Shared inert protocol identity constants
 tools/proof-client/   Inert proof-client placeholder
 tests/                Placeholder README files for future tests
@@ -31,4 +31,4 @@ The driver skeleton intentionally has no active report-submission path:
 - no click/type behavior;
 - no install/load scripts.
 
-Future work must add descriptor validation, readiness checks, release-all behavior, and separate command-send vs observed-effect logging before any write-capable proof.
+Future work must add read-only descriptor validation, readiness checks, release-all behavior, and separate command-send vs observed-effect logging before any write-capable proof.

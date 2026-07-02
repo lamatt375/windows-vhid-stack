@@ -13,6 +13,7 @@ VhidCreateDevice(
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, VHID_DEVICE_CONTEXT);
     attributes.EvtCleanupCallback = VhidEvtDeviceContextCleanup;
+    attributes.ExecutionLevel = WdfExecutionLevelPassive;
 
     status = WdfDeviceCreate(&DeviceInit, &attributes, &device);
     if (!NT_SUCCESS(status)) {

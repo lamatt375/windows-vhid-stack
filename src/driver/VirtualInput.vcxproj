@@ -32,6 +32,9 @@
       <AdditionalIncludeDirectories>$(VhidWdkRoot)Include\$(WindowsTargetPlatformVersion)\km;$(VhidWdkRoot)Include\$(WindowsTargetPlatformVersion)\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <SignMode>Off</SignMode>
+  </PropertyGroup>
   <ItemGroup>
     <ClInclude Include="Device.h" />
     <ClInclude Include="Driver.h" />

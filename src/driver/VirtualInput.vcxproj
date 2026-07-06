@@ -38,6 +38,7 @@
   </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <SignMode>Off</SignMode>
+    <EnableInf2cat>false</EnableInf2cat>
   </PropertyGroup>
   <ItemGroup>
     <ClInclude Include="Device.h" />

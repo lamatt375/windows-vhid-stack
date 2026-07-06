@@ -38,7 +38,7 @@
   </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <SignMode>Off</SignMode>
-    <EnableInf2cat>false</EnableInf2cat>
+    <Inf2CatWindowsVersionList>10_X64</Inf2CatWindowsVersionList>
   </PropertyGroup>
   <ItemGroup>
     <ClInclude Include="Device.h" />
@@ -55,4 +55,14 @@
     <Inf Include="VirtualInput.inf" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- Stage the freshly linked .sys into the package folder that Inf2Cat scans
+       so the catalog signability test can resolve it (fixes Inf2Cat error
+       22.9.1). The scan folder is $(OutDir)$(ProjectName)\ per the T-016 build
+       evidence ("VirtualInput\virtualinput.inf"). AfterTargets=Link guarantees
+       the copy runs even if the Inf2Cat target name differs by WDK version. -->
+  <Target Name="StageSysForInf2Cat" AfterTargets="Link" BeforeTargets="Inf2Cat">
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="$(OutDir)$(ProjectName)\"
+          SkipUnchangedFiles="false" />
+  </Target>
 </Project>

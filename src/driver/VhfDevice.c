@@ -2,6 +2,9 @@
 #include "../shared/VhidHidDescriptor.h"
 #include "Trace.h"
 
+#define VHID_STATUS_VHF_CREATE_FAILED STATUS_DEVICE_NOT_READY
+#define VHID_STATUS_VHF_START_FAILED STATUS_DEVICE_POWER_FAILURE
+
 VOID
 VhidVhfContextInit(
     _Out_ PVHID_VHF_CONTEXT Context
@@ -31,16 +34,22 @@ VhidVhfInitializeNoReports(
 
     status = VhfCreate(&config, &Context->VhfHandle);
     if (!NT_SUCCESS(status)) {
-        return status;
+        VHID_LOG_ERROR(
+            "VhfCreate failed, status=0x%08X",
+            status);
+        return VHID_STATUS_VHF_CREATE_FAILED;
     }
 
     Context->VhfCreated = TRUE;
 
     status = VhfStart(Context->VhfHandle);
     if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR(
+            "VhfStart failed, status=0x%08X",
+            status);
         VhfDelete(Context->VhfHandle, TRUE);
         VhidVhfContextInit(Context);
-        return status;
+        return VHID_STATUS_VHF_START_FAILED;
     }
 
     Context->VhfStarted = TRUE;

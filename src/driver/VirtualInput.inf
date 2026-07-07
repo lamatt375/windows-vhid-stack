@@ -29,6 +29,12 @@ VirtualInput.sys=1
 [VirtualInput_Device.NT]
 CopyFiles=VirtualInput_CopyFiles
 
+[VirtualInput_Device.NT.HW]
+AddReg=VirtualInput_Device.NT.HW.AddReg
+
+[VirtualInput_Device.NT.HW.AddReg]
+HKR,,LowerFilters,0x00010008,"vhf"
+
 [VirtualInput_CopyFiles]
 VirtualInput.sys
 

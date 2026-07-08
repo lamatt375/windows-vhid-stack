@@ -30,6 +30,7 @@ typedef struct _VHID_VHF_CONTEXT {
     BOOLEAN VhfCreated;
     BOOLEAN VhfStarted;
     BOOLEAN ReportSubmissionEnabled;
+    BOOLEAN ReadyForNextReport;
     volatile LONG ReportSequenceState;
     NTSTATUS LastReportSubmitStatus;
     KSPIN_LOCK SubmissionLock;
@@ -47,6 +48,11 @@ NTSTATUS
 VhidVhfInitialize(
     _Inout_ PVHID_VHF_CONTEXT Context,
     _In_ WDFDEVICE Device
+    );
+
+NTSTATUS
+VhidVhfTriggerSmokeSequence(
+    _Inout_ PVHID_VHF_CONTEXT Context
     );
 
 EVT_VHF_READY_FOR_NEXT_READ_REPORT VhidEvtVhfReadyForNextReadReport;

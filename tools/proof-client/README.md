@@ -1,12 +1,13 @@
-﻿# Proof Client
+# Proof Client
 
-This directory is reserved for a future VM-only proof client.
+This directory contains a minimal VM-only smoke trigger helper.
 
 Current boundary:
 
-- does not open a driver handle;
-- does not send IOCTLs;
-- does not move/click/type;
-- does not prove driver effects.
+- opens the fixed windows-vhid-stack device interface;
+- accepts exactly one verb: `trigger`;
+- sends exactly one no-payload IOCTL to request the driver's built-in fixed smoke sequence;
+- does not accept key codes, text, coordinates, report bytes, click flags, repeat counts, or arbitrary commands;
+- does not move/click/type through any user-mode input API.
 
-Any write-capable proof client must wait for descriptor validation, readiness checks, clear-all design, and explicit VM-only write-proof approval.
+The helper is for a later human-approved isolated VM smoke run only. It does not sign, install, load, configure, or test the driver by itself.

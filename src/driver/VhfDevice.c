@@ -14,34 +14,42 @@ static UCHAR VhidNeutralKeyboardReport[VHID_KEYBOARD_INPUT_REPORT_LENGTH] = {
     0x00, 0x00, 0x00, 0x00
 };
 
+static UCHAR VhidKeyboardAReport[VHID_KEYBOARD_INPUT_REPORT_LENGTH] = {
+    VHID_KEYBOARD_REPORT_ID, 0x00, 0x00, 0x04, 0x00,
+    0x00, 0x00, 0x00, 0x00
+};
+
 static UCHAR VhidNeutralMouseReport[VHID_MOUSE_INPUT_REPORT_LENGTH] = {
     VHID_MOUSE_REPORT_ID, 0x00, 0x00, 0x00
 };
 
+static UCHAR VhidMouseMoveRightReport[VHID_MOUSE_INPUT_REPORT_LENGTH] = {
+    VHID_MOUSE_REPORT_ID, 0x00, 0x01, 0x00
+};
+
 C_ASSERT(sizeof(VhidNeutralKeyboardReport) == VHID_KEYBOARD_INPUT_REPORT_LENGTH);
+C_ASSERT(sizeof(VhidKeyboardAReport) == VHID_KEYBOARD_INPUT_REPORT_LENGTH);
 C_ASSERT(sizeof(VhidNeutralMouseReport) == VHID_MOUSE_INPUT_REPORT_LENGTH);
+C_ASSERT(sizeof(VhidMouseMoveRightReport) == VHID_MOUSE_INPUT_REPORT_LENGTH);
 
 static
 BOOLEAN
-VhidIsNeutralReport(
+VhidIsExpectedReport(
     _In_reads_bytes_(ReportLength) PUCHAR Report,
     _In_ ULONG ReportLength,
-    _In_ UCHAR ExpectedReportId,
+    _In_reads_bytes_(ExpectedReportLength) PUCHAR ExpectedReport,
     _In_ ULONG ExpectedReportLength
     )
 {
     ULONG index;
 
-    if (Report == NULL || ReportLength != ExpectedReportLength) {
+    if (Report == NULL || ExpectedReport == NULL ||
+        ReportLength != ExpectedReportLength) {
         return FALSE;
     }
 
-    if (Report[0] != ExpectedReportId) {
-        return FALSE;
-    }
-
-    for (index = 1; index < ReportLength; index++) {
-        if (Report[index] != 0x00) {
+    for (index = 0; index < ReportLength; index++) {
+        if (Report[index] != ExpectedReport[index]) {
             return FALSE;
         }
     }
@@ -51,9 +59,9 @@ VhidIsNeutralReport(
 
 static
 VOID
-VhidVhfDisableNeutralSubmission(
+VhidVhfDisableReportSequence(
     _Inout_ PVHID_VHF_CONTEXT Context,
-    _In_ VHID_NEUTRAL_REPORT_STATE State,
+    _In_ VHID_REPORT_SEQUENCE_STATE State,
     _In_ NTSTATUS Status
     )
 {
@@ -62,13 +70,13 @@ VhidVhfDisableNeutralSubmission(
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
     Context->LastReportSubmitStatus = Status;
     Context->ReportSubmissionEnabled = FALSE;
-    InterlockedExchange(&Context->NeutralReportState, (LONG)State);
+    InterlockedExchange(&Context->ReportSequenceState, (LONG)State);
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 }
 
 static
 VOID
-VhidVhfArmNeutralSubmission(
+VhidVhfArmReportSequence(
     _Inout_ PVHID_VHF_CONTEXT Context
     )
 {
@@ -78,8 +86,8 @@ VhidVhfArmNeutralSubmission(
     Context->LastReportSubmitStatus = STATUS_SUCCESS;
     Context->Deleting = FALSE;
     InterlockedExchange(
-        &Context->NeutralReportState,
-        (LONG)VhidNeutralKeyboardPending);
+        &Context->ReportSequenceState,
+        (LONG)VhidReportKeyboardPreClearPending);
     Context->ReportSubmissionEnabled = TRUE;
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 }
@@ -122,7 +130,7 @@ VOID
 VhidVhfCompleteSubmit(
     _Inout_ PVHID_VHF_CONTEXT Context,
     _In_ NTSTATUS Status,
-    _In_ VHID_NEUTRAL_REPORT_STATE SuccessState,
+    _In_ VHID_REPORT_SEQUENCE_STATE SuccessState,
     _In_ BOOLEAN DisableOnSuccess
     )
 {
@@ -135,15 +143,15 @@ VhidVhfCompleteSubmit(
     if (!NT_SUCCESS(Status)) {
         Context->ReportSubmissionEnabled = FALSE;
         InterlockedExchange(
-            &Context->NeutralReportState,
-            (LONG)VhidNeutralReportFailed);
+            &Context->ReportSequenceState,
+            (LONG)VhidReportSequenceFailed);
     } else if (!Context->Deleting) {
         if (DisableOnSuccess) {
             Context->ReportSubmissionEnabled = FALSE;
         }
 
         InterlockedExchange(
-            &Context->NeutralReportState,
+            &Context->ReportSequenceState,
             (LONG)SuccessState);
     }
 
@@ -160,7 +168,7 @@ VhidVhfCompleteSubmit(
 
 static
 NTSTATUS
-VhidVhfSubmitNeutralReport(
+VhidVhfSubmitSequencedReport(
     _In_ VHFHANDLE VhfHandle,
     _In_reads_bytes_(ReportLength) PUCHAR Report,
     _In_ ULONG ReportLength,
@@ -168,28 +176,41 @@ VhidVhfSubmitNeutralReport(
     )
 {
     HID_XFER_PACKET packet;
+    BOOLEAN reportAllowed;
 
     if (VhfHandle == NULL) {
         return STATUS_DEVICE_NOT_READY;
     }
 
-    if (ReportId == VHID_KEYBOARD_REPORT_ID) {
-        if (!VhidIsNeutralReport(
-                Report,
-                ReportLength,
-                VHID_KEYBOARD_REPORT_ID,
-                VHID_KEYBOARD_INPUT_REPORT_LENGTH)) {
-            return STATUS_INVALID_PARAMETER;
-        }
-    } else if (ReportId == VHID_MOUSE_REPORT_ID) {
-        if (!VhidIsNeutralReport(
-                Report,
-                ReportLength,
-                VHID_MOUSE_REPORT_ID,
-                VHID_MOUSE_INPUT_REPORT_LENGTH)) {
-            return STATUS_INVALID_PARAMETER;
-        }
-    } else {
+    reportAllowed = FALSE;
+
+    if (ReportId == VHID_KEYBOARD_REPORT_ID &&
+        ReportLength == VHID_KEYBOARD_INPUT_REPORT_LENGTH) {
+        reportAllowed = VhidIsExpectedReport(
+                            Report,
+                            ReportLength,
+                            VhidNeutralKeyboardReport,
+                            sizeof(VhidNeutralKeyboardReport)) ||
+                        VhidIsExpectedReport(
+                            Report,
+                            ReportLength,
+                            VhidKeyboardAReport,
+                            sizeof(VhidKeyboardAReport));
+    } else if (ReportId == VHID_MOUSE_REPORT_ID &&
+               ReportLength == VHID_MOUSE_INPUT_REPORT_LENGTH) {
+        reportAllowed = VhidIsExpectedReport(
+                            Report,
+                            ReportLength,
+                            VhidNeutralMouseReport,
+                            sizeof(VhidNeutralMouseReport)) ||
+                        VhidIsExpectedReport(
+                            Report,
+                            ReportLength,
+                            VhidMouseMoveRightReport,
+                            sizeof(VhidMouseMoveRightReport));
+    }
+
+    if (!reportAllowed) {
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -212,7 +233,7 @@ VhidVhfContextInit(
         &Context->NoActiveSubmissionsEvent,
         NotificationEvent,
         TRUE);
-    Context->NeutralReportState = (LONG)VhidNeutralReportDisabled;
+    Context->ReportSequenceState = (LONG)VhidReportSequenceDisabled;
     Context->LastReportSubmitStatus = STATUS_SUCCESS;
 }
 
@@ -234,9 +255,9 @@ VhidVhfInitialize(
     config.VhfClientContext = Context;
     config.EvtVhfReadyForNextReadReport = VhidEvtVhfReadyForNextReadReport;
 
-    VhidVhfDisableNeutralSubmission(
+    VhidVhfDisableReportSequence(
         Context,
-        VhidNeutralReportDisabled,
+        VhidReportSequenceDisabled,
         STATUS_SUCCESS);
 
     status = VhfCreate(&config, &Context->VhfHandle);
@@ -261,9 +282,68 @@ VhidVhfInitialize(
 
     Context->VhfStarted = TRUE;
     Context->Initialized = TRUE;
-    VhidVhfArmNeutralSubmission(Context);
+    VhidVhfArmReportSequence(Context);
 
     return status;
+}
+
+static
+BOOLEAN
+VhidVhfSubmitReadyReport(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ VHID_REPORT_SEQUENCE_STATE PendingState,
+    _In_ VHID_REPORT_SEQUENCE_STATE SubmittingState,
+    _In_ VHID_REPORT_SEQUENCE_STATE SuccessState,
+    _In_ BOOLEAN DisableOnSuccess,
+    _In_reads_bytes_(ReportLength) PUCHAR Report,
+    _In_ ULONG ReportLength,
+    _In_ UCHAR ReportId,
+    _In_z_ PCSTR StepName
+    )
+{
+    VHFHANDLE vhfHandle;
+    BOOLEAN deleteInProgress;
+    LONG previousState;
+    NTSTATUS status;
+
+    previousState = InterlockedCompareExchange(
+        &Context->ReportSequenceState,
+        (LONG)SubmittingState,
+        (LONG)PendingState);
+
+    if (previousState != (LONG)PendingState) {
+        return FALSE;
+    }
+
+    if (!VhidVhfTryAcquireSubmit(Context, &vhfHandle, &deleteInProgress)) {
+        if (!deleteInProgress) {
+            VhidVhfDisableReportSequence(
+                Context,
+                VhidReportSequenceFailed,
+                STATUS_DEVICE_NOT_READY);
+        }
+        return TRUE;
+    }
+
+    status = VhidVhfSubmitSequencedReport(
+        vhfHandle,
+        Report,
+        ReportLength,
+        ReportId);
+
+    VhidVhfCompleteSubmit(
+        Context,
+        status,
+        SuccessState,
+        DisableOnSuccess);
+
+    if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR("%s failed, status=0x%08X", StepName, status);
+        return TRUE;
+    }
+
+    VHID_LOG_INFO("%s submitted, reportId=%u", StepName, ReportId);
+    return TRUE;
 }
 
 VOID
@@ -272,10 +352,6 @@ VhidEvtVhfReadyForNextReadReport(
     )
 {
     PVHID_VHF_CONTEXT context;
-    VHFHANDLE vhfHandle;
-    BOOLEAN deleteInProgress;
-    LONG previousState;
-    NTSTATUS status;
 
     context = (PVHID_VHF_CONTEXT)VhfClientContext;
     if (context == NULL) {
@@ -286,86 +362,94 @@ VhidEvtVhfReadyForNextReadReport(
         return;
     }
 
-    previousState = InterlockedCompareExchange(
-        &context->NeutralReportState,
-        (LONG)VhidNeutralKeyboardSubmitting,
-        (LONG)VhidNeutralKeyboardPending);
-
-    if (previousState == (LONG)VhidNeutralKeyboardPending) {
-        if (!VhidVhfTryAcquireSubmit(context, &vhfHandle, &deleteInProgress)) {
-            if (!deleteInProgress) {
-                VhidVhfDisableNeutralSubmission(
-                    context,
-                    VhidNeutralReportFailed,
-                    STATUS_DEVICE_NOT_READY);
-            }
-            return;
-        }
-
-        status = VhidVhfSubmitNeutralReport(
-            vhfHandle,
+    if (VhidVhfSubmitReadyReport(
+            context,
+            VhidReportKeyboardPreClearPending,
+            VhidReportKeyboardPreClearSubmitting,
+            VhidReportMousePreClearPending,
+            FALSE,
             VhidNeutralKeyboardReport,
             sizeof(VhidNeutralKeyboardReport),
-            VHID_KEYBOARD_REPORT_ID);
-
-        VhidVhfCompleteSubmit(
-            context,
-            status,
-            VhidNeutralMousePending,
-            FALSE);
-
-        if (!NT_SUCCESS(status)) {
-            VHID_LOG_ERROR(
-                "Neutral keyboard report submit failed, status=0x%08X",
-                status);
-            return;
-        }
-
-        VHID_LOG_INFO(
-            "Neutral keyboard report submitted, reportId=%u",
-            VHID_KEYBOARD_REPORT_ID);
+            VHID_KEYBOARD_REPORT_ID,
+            "Keyboard pre-clear report")) {
         return;
     }
 
-    previousState = InterlockedCompareExchange(
-        &context->NeutralReportState,
-        (LONG)VhidNeutralMouseSubmitting,
-        (LONG)VhidNeutralMousePending);
-
-    if (previousState == (LONG)VhidNeutralMousePending) {
-        if (!VhidVhfTryAcquireSubmit(context, &vhfHandle, &deleteInProgress)) {
-            if (!deleteInProgress) {
-                VhidVhfDisableNeutralSubmission(
-                    context,
-                    VhidNeutralReportFailed,
-                    STATUS_DEVICE_NOT_READY);
-            }
-            return;
-        }
-
-        status = VhidVhfSubmitNeutralReport(
-            vhfHandle,
+    if (VhidVhfSubmitReadyReport(
+            context,
+            VhidReportMousePreClearPending,
+            VhidReportMousePreClearSubmitting,
+            VhidReportKeyboardAPressPending,
+            FALSE,
             VhidNeutralMouseReport,
             sizeof(VhidNeutralMouseReport),
-            VHID_MOUSE_REPORT_ID);
-
-        VhidVhfCompleteSubmit(
-            context,
-            status,
-            VhidNeutralReportComplete,
-            TRUE);
-
-        if (!NT_SUCCESS(status)) {
-            VHID_LOG_ERROR(
-                "Neutral mouse report submit failed, status=0x%08X",
-                status);
-            return;
-        }
-
-        VHID_LOG_INFO(
-            "Neutral mouse report submitted, reportId=%u",
-            VHID_MOUSE_REPORT_ID);
+            VHID_MOUSE_REPORT_ID,
+            "Mouse pre-clear report")) {
+        return;
     }
+
+    if (VhidVhfSubmitReadyReport(
+            context,
+            VhidReportKeyboardAPressPending,
+            VhidReportKeyboardAPressSubmitting,
+            VhidReportKeyboardReleasePending,
+            FALSE,
+            VhidKeyboardAReport,
+            sizeof(VhidKeyboardAReport),
+            VHID_KEYBOARD_REPORT_ID,
+            "Keyboard A report")) {
+        return;
+    }
+
+    if (VhidVhfSubmitReadyReport(
+            context,
+            VhidReportKeyboardReleasePending,
+            VhidReportKeyboardReleaseSubmitting,
+            VhidReportMouseMoveRightPending,
+            FALSE,
+            VhidNeutralKeyboardReport,
+            sizeof(VhidNeutralKeyboardReport),
+            VHID_KEYBOARD_REPORT_ID,
+            "Keyboard release report")) {
+        return;
+    }
+
+    if (VhidVhfSubmitReadyReport(
+            context,
+            VhidReportMouseMoveRightPending,
+            VhidReportMouseMoveRightSubmitting,
+            VhidReportMousePostClearPending,
+            FALSE,
+            VhidMouseMoveRightReport,
+            sizeof(VhidMouseMoveRightReport),
+            VHID_MOUSE_REPORT_ID,
+            "Mouse move-right report")) {
+        return;
+    }
+
+    if (VhidVhfSubmitReadyReport(
+            context,
+            VhidReportMousePostClearPending,
+            VhidReportMousePostClearSubmitting,
+            VhidReportKeyboardFinalClearPending,
+            FALSE,
+            VhidNeutralMouseReport,
+            sizeof(VhidNeutralMouseReport),
+            VHID_MOUSE_REPORT_ID,
+            "Mouse post-clear report")) {
+        return;
+    }
+
+    VhidVhfSubmitReadyReport(
+        context,
+        VhidReportKeyboardFinalClearPending,
+        VhidReportKeyboardFinalClearSubmitting,
+        VhidReportSequenceComplete,
+        TRUE,
+        VhidNeutralKeyboardReport,
+        sizeof(VhidNeutralKeyboardReport),
+        VHID_KEYBOARD_REPORT_ID,
+        "Keyboard final-clear report");
 }
 
 VOID
@@ -385,8 +469,8 @@ VhidVhfCleanup(
     Context->Deleting = TRUE;
     Context->ReportSubmissionEnabled = FALSE;
     InterlockedExchange(
-        &Context->NeutralReportState,
-        (LONG)VhidNeutralReportDisabled);
+        &Context->ReportSequenceState,
+        (LONG)VhidReportSequenceDisabled);
     Context->VhfStarted = FALSE;
     waitForSubmissions = (Context->ActiveSubmissions > 0);
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
@@ -405,8 +489,8 @@ VhidVhfCleanup(
     Context->VhfHandle = NULL;
     Context->ReportSubmissionEnabled = FALSE;
     InterlockedExchange(
-        &Context->NeutralReportState,
-        (LONG)VhidNeutralReportDisabled);
+        &Context->ReportSequenceState,
+        (LONG)VhidReportSequenceDisabled);
     Context->VhfCreated = FALSE;
     Context->Initialized = FALSE;
     Context->ActiveSubmissions = 0;

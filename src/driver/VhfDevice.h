@@ -4,15 +4,25 @@
 #include <wdf.h>
 #include <vhf.h>
 
-typedef enum _VHID_NEUTRAL_REPORT_STATE {
-    VhidNeutralReportDisabled = 0,
-    VhidNeutralKeyboardPending = 1,
-    VhidNeutralKeyboardSubmitting = 2,
-    VhidNeutralMousePending = 3,
-    VhidNeutralMouseSubmitting = 4,
-    VhidNeutralReportComplete = 5,
-    VhidNeutralReportFailed = 6
-} VHID_NEUTRAL_REPORT_STATE;
+typedef enum _VHID_REPORT_SEQUENCE_STATE {
+    VhidReportSequenceDisabled = 0,
+    VhidReportKeyboardPreClearPending = 1,
+    VhidReportKeyboardPreClearSubmitting = 2,
+    VhidReportMousePreClearPending = 3,
+    VhidReportMousePreClearSubmitting = 4,
+    VhidReportKeyboardAPressPending = 5,
+    VhidReportKeyboardAPressSubmitting = 6,
+    VhidReportKeyboardReleasePending = 7,
+    VhidReportKeyboardReleaseSubmitting = 8,
+    VhidReportMouseMoveRightPending = 9,
+    VhidReportMouseMoveRightSubmitting = 10,
+    VhidReportMousePostClearPending = 11,
+    VhidReportMousePostClearSubmitting = 12,
+    VhidReportKeyboardFinalClearPending = 13,
+    VhidReportKeyboardFinalClearSubmitting = 14,
+    VhidReportSequenceComplete = 15,
+    VhidReportSequenceFailed = 16
+} VHID_REPORT_SEQUENCE_STATE;
 
 typedef struct _VHID_VHF_CONTEXT {
     VHFHANDLE VhfHandle;
@@ -20,7 +30,7 @@ typedef struct _VHID_VHF_CONTEXT {
     BOOLEAN VhfCreated;
     BOOLEAN VhfStarted;
     BOOLEAN ReportSubmissionEnabled;
-    volatile LONG NeutralReportState;
+    volatile LONG ReportSequenceState;
     NTSTATUS LastReportSubmitStatus;
     KSPIN_LOCK SubmissionLock;
     KEVENT NoActiveSubmissionsEvent;

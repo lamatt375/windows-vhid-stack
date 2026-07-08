@@ -1,4 +1,4 @@
-﻿#include "Device.h"
+#include "Device.h"
 #include "Trace.h"
 
 NTSTATUS
@@ -23,7 +23,7 @@ VhidCreateDevice(
     context = VhidGetDeviceContext(device);
     VhidVhfContextInit(&context->Vhf);
 
-    status = VhidVhfInitializeNoReports(&context->Vhf, device);
+    status = VhidVhfInitialize(&context->Vhf, device);
     if (!NT_SUCCESS(status)) {
         return status;
     }

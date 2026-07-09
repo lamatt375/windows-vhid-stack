@@ -26,7 +26,7 @@ tests/                Descriptor validation and placeholder README files
 
 The driver skeleton intentionally has only a narrow fixed trigger and report path:
 
-- one device interface exposes one no-payload IOCTL that arms the fixed smoke sequence once; later VHF ready callbacks submit each report;
+- one device interface exposes one no-payload IOCTL that kickstarts the fixed smoke sequence with the first neutral report; later VHF ready callbacks submit reports 2-7;
 - `VhfReadReportSubmit` is limited to one callback-paced sequence: keyboard neutral pre-clear, mouse neutral pre-clear, keyboard `A` press, keyboard release, mouse move right by one unit, mouse neutral post-clear, and keyboard neutral final clear;
 - no arbitrary key API, repeated key path, button report, arbitrary movement report, or wheel report builders;
 - no IOCTL carrying HID report bytes, key codes, text, coordinates, clicks, repeat counts, or arbitrary commands;

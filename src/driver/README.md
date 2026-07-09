@@ -6,7 +6,7 @@ Current boundaries:
 
 - VHF report submission is limited to a fixed seven-report sequence;
 - the sequence is not auto-fired after VHF start;
-- one no-payload IOCTL can arm the fixed sequence once; later VHF ready callbacks submit each report;
+- one no-payload IOCTL can kickstart the fixed sequence once with the first neutral report; later VHF ready callbacks submit reports 2-7;
 - the only keyboard press is one `A` press followed by keyboard release;
 - the only mouse movement is one relative X +1 report followed by mouse neutral clear;
 - no mouse button, click, arbitrary movement, or wheel reports;

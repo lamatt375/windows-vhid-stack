@@ -126,7 +126,8 @@ VhidVhfCompleteSubmit(
     _Inout_ PVHID_VHF_CONTEXT Context,
     _In_ NTSTATUS Status,
     _In_ VHID_REPORT_SEQUENCE_STATE SuccessState,
-    _In_ BOOLEAN DisableOnSuccess
+    _In_ BOOLEAN DisableOnSuccess,
+    _In_ BOOLEAN UpdateTriggerStatus
     )
 {
     KIRQL oldIrql;
@@ -134,6 +135,9 @@ VhidVhfCompleteSubmit(
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
 
     Context->LastReportSubmitStatus = Status;
+    if (UpdateTriggerStatus) {
+        Context->LastTriggerStatus = Status;
+    }
 
     if (!NT_SUCCESS(Status)) {
         Context->ReportSubmissionEnabled = FALSE;
@@ -346,7 +350,8 @@ VhidVhfSubmitReadyReport(
         Context,
         status,
         SuccessState,
-        DisableOnSuccess);
+        DisableOnSuccess,
+        FALSE);
 
     if (!NT_SUCCESS(status)) {
         VHID_LOG_ERROR("%s failed, status=0x%08X", StepName, status);
@@ -469,10 +474,15 @@ VhidVhfTriggerSmokeSequence(
     KIRQL oldIrql;
     LONG state;
     NTSTATUS status;
+    VHFHANDLE vhfHandle;
+    BOOLEAN submitKickstart;
 
     if (Context == NULL) {
         return STATUS_INVALID_PARAMETER;
     }
+
+    vhfHandle = NULL;
+    submitKickstart = FALSE;
 
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
 
@@ -510,18 +520,54 @@ VhidVhfTriggerSmokeSequence(
         Context->ReadyForNextReport = FALSE;
         InterlockedExchange(
             &Context->ReportSequenceState,
-            (LONG)VhidReportKeyboardPreClearPending);
+            (LONG)VhidReportKeyboardPreClearSubmitting);
+        Context->ActiveSubmissions++;
+        KeClearEvent(&Context->NoActiveSubmissionsEvent);
+        vhfHandle = Context->VhfHandle;
+        submitKickstart = TRUE;
         status = STATUS_SUCCESS;
         VHID_LOG_INFO(
             "%s",
-            "Smoke trigger armed, waiting for VHF ready callback");
+            "Smoke trigger armed, kickstarting first report");
     }
 
     Context->LastTriggerStatus = status;
 
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 
-    return status;
+    if (!submitKickstart) {
+        return status;
+    }
+
+    VHID_LOG_INFO(
+        "Keyboard neutral pre-clear report kickstart attempt, reportId=%u",
+        VHID_KEYBOARD_REPORT_ID);
+
+    status = VhidVhfSubmitSequencedReport(
+        vhfHandle,
+        VhidNeutralKeyboardReport,
+        sizeof(VhidNeutralKeyboardReport),
+        VHID_KEYBOARD_REPORT_ID);
+
+    VhidVhfCompleteSubmit(
+        Context,
+        status,
+        VhidReportMousePreClearPending,
+        FALSE,
+        TRUE);
+
+    if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR(
+            "Keyboard neutral pre-clear report kickstart failed, status=0x%08X",
+            status);
+        return status;
+    }
+
+    VHID_LOG_INFO(
+        "Keyboard neutral pre-clear report kickstart submitted, reportId=%u",
+        VHID_KEYBOARD_REPORT_ID);
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS

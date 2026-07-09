@@ -9,7 +9,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{87B80FA4-A5F5-4A99-8C27-010DF78CEB74}</ProjectGuid>
     <RootNamespace>VhidProofClient</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">

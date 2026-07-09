@@ -75,22 +75,6 @@ VhidVhfDisableReportSequence(
 }
 
 static
-NTSTATUS
-VhidVhfGetLastReportSubmitStatus(
-    _Inout_ PVHID_VHF_CONTEXT Context
-    )
-{
-    KIRQL oldIrql;
-    NTSTATUS status;
-
-    KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
-    status = Context->LastReportSubmitStatus;
-    KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
-
-    return status;
-}
-
-static
 BOOLEAN
 VhidVhfTryBeginReadySubmit(
     _Inout_ PVHID_VHF_CONTEXT Context,
@@ -483,13 +467,10 @@ VhidVhfTriggerSmokeSequence(
     KIRQL oldIrql;
     LONG state;
     NTSTATUS status;
-    VHFHANDLE vhfHandle;
 
     if (Context == NULL) {
         return STATUS_INVALID_PARAMETER;
     }
-
-    vhfHandle = NULL;
 
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
 
@@ -521,59 +502,22 @@ VhidVhfTriggerSmokeSequence(
             "Smoke trigger rejected, invalid state=%ld status=0x%08X",
             state,
             status);
-    } else if (!Context->ReadyForNextReport) {
-        status = STATUS_DEVICE_NOT_READY;
-        VHID_LOG_ERROR(
-            "Smoke trigger rejected, no ready token status=0x%08X",
-            status);
     } else {
         Context->LastReportSubmitStatus = STATUS_SUCCESS;
         Context->ReportSubmissionEnabled = TRUE;
         Context->ReadyForNextReport = FALSE;
         InterlockedExchange(
             &Context->ReportSequenceState,
-            (LONG)VhidReportKeyboardPreClearSubmitting);
-        Context->ActiveSubmissions++;
-        KeClearEvent(&Context->NoActiveSubmissionsEvent);
-        vhfHandle = Context->VhfHandle;
+            (LONG)VhidReportKeyboardPreClearPending);
         status = STATUS_SUCCESS;
-        VHID_LOG_INFO("%s", "Smoke trigger accepted, initial ready token claimed");
+        VHID_LOG_INFO(
+            "%s",
+            "Smoke trigger armed, waiting for VHF ready callback");
     }
 
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    VHID_LOG_INFO(
-        "Keyboard neutral pre-clear report submit attempt, reportId=%u",
-        VHID_KEYBOARD_REPORT_ID);
-
-    status = VhidVhfSubmitSequencedReport(
-        vhfHandle,
-        VhidNeutralKeyboardReport,
-        sizeof(VhidNeutralKeyboardReport),
-        VHID_KEYBOARD_REPORT_ID);
-
-    VhidVhfCompleteSubmit(
-        Context,
-        status,
-        VhidReportMousePreClearPending,
-        FALSE);
-
-    if (!NT_SUCCESS(status)) {
-        VHID_LOG_ERROR(
-            "Keyboard neutral pre-clear report failed, status=0x%08X",
-            status);
-        return status;
-    }
-
-    VHID_LOG_INFO(
-        "Keyboard neutral pre-clear report submitted, reportId=%u",
-        VHID_KEYBOARD_REPORT_ID);
-
-    return VhidVhfGetLastReportSubmitStatus(Context);
+    return status;
 }
 
 VOID
@@ -588,6 +532,7 @@ VhidEvtVhfReadyForNextReadReport(
         return;
     }
 
+    VHID_LOG_INFO("%s", "VHF ready callback seen");
     VhidVhfMarkReadyForNextReport(context);
 
     if (!context->ReportSubmissionEnabled) {

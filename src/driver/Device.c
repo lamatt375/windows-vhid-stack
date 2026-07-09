@@ -79,9 +79,15 @@ VhidEvtIoDeviceControl(
     WDFDEVICE device;
     PVHID_DEVICE_CONTEXT context;
     NTSTATUS status;
+    PVOID outputBuffer;
+    size_t bytesWritten;
+    ULONG_PTR information;
 
     device = WdfIoQueueGetDevice(Queue);
     context = VhidGetDeviceContext(device);
+    outputBuffer = NULL;
+    bytesWritten = 0;
+    information = 0;
 
     VHID_LOG_INFO(
         "Device control received, ioctl=0x%08X input=%Iu output=%Iu",
@@ -89,34 +95,65 @@ VhidEvtIoDeviceControl(
         InputBufferLength,
         OutputBufferLength);
 
-    if (IoControlCode != VHID_IOCTL_TRIGGER_SMOKE_SEQUENCE) {
+    if (IoControlCode == VHID_IOCTL_TRIGGER_SMOKE_SEQUENCE) {
+        if (InputBufferLength != 0 || OutputBufferLength != 0) {
+            status = STATUS_INVALID_PARAMETER;
+            VHID_LOG_ERROR(
+                "Smoke trigger rejected, nonzero buffers input=%Iu output=%Iu status=0x%08X",
+                InputBufferLength,
+                OutputBufferLength,
+                status);
+        } else {
+            VHID_LOG_INFO("%s", "Smoke trigger IOCTL received");
+            status = VhidVhfTriggerSmokeSequence(&context->Vhf);
+            if (NT_SUCCESS(status)) {
+                VHID_LOG_INFO("%s", "Smoke trigger IOCTL accepted");
+            } else {
+                VHID_LOG_ERROR(
+                    "Smoke trigger IOCTL failed, status=0x%08X",
+                    status);
+            }
+        }
+    } else if (IoControlCode == VHID_IOCTL_QUERY_STATUS) {
+        if (InputBufferLength != 0) {
+            status = STATUS_INVALID_PARAMETER;
+            VHID_LOG_ERROR(
+                "Status query rejected, nonzero input=%Iu status=0x%08X",
+                InputBufferLength,
+                status);
+        } else {
+            status = WdfRequestRetrieveOutputBuffer(
+                Request,
+                sizeof(VHID_STATUS_REPORT),
+                &outputBuffer,
+                NULL);
+            if (NT_SUCCESS(status)) {
+                status = VhidVhfQueryStatus(
+                    &context->Vhf,
+                    outputBuffer,
+                    OutputBufferLength,
+                    &bytesWritten);
+                if (NT_SUCCESS(status)) {
+                    information = (ULONG_PTR)bytesWritten;
+                }
+            }
+
+            if (!NT_SUCCESS(status)) {
+                VHID_LOG_ERROR(
+                    "Status query failed, status=0x%08X",
+                    status);
+            }
+        }
+    } else {
         status = STATUS_INVALID_DEVICE_REQUEST;
         VHID_LOG_ERROR(
             "Device control rejected, unsupported ioctl=0x%08X status=0x%08X",
             IoControlCode,
             status);
-    } else if (InputBufferLength != 0 || OutputBufferLength != 0) {
-        status = STATUS_INVALID_PARAMETER;
-        VHID_LOG_ERROR(
-            "Smoke trigger rejected, nonzero buffers input=%Iu output=%Iu status=0x%08X",
-            InputBufferLength,
-            OutputBufferLength,
-            status);
-    } else {
-        VHID_LOG_INFO("%s", "Smoke trigger IOCTL received");
-        status = VhidVhfTriggerSmokeSequence(&context->Vhf);
-        if (NT_SUCCESS(status)) {
-            VHID_LOG_INFO("%s", "Smoke trigger IOCTL accepted");
-        } else {
-            VHID_LOG_ERROR(
-                "Smoke trigger IOCTL failed, status=0x%08X",
-                status);
-        }
     }
 
-    WdfRequestComplete(Request, status);
+    WdfRequestCompleteWithInformation(Request, status, information);
 }
-
 VOID
 VhidEvtDeviceContextCleanup(
     _In_ WDFOBJECT Object

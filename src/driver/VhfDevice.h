@@ -33,6 +33,7 @@ typedef struct _VHID_VHF_CONTEXT {
     BOOLEAN ReadyForNextReport;
     volatile LONG ReportSequenceState;
     NTSTATUS LastReportSubmitStatus;
+    NTSTATUS LastTriggerStatus;
     KSPIN_LOCK SubmissionLock;
     KEVENT NoActiveSubmissionsEvent;
     LONG ActiveSubmissions;
@@ -53,6 +54,14 @@ VhidVhfInitialize(
 NTSTATUS
 VhidVhfTriggerSmokeSequence(
     _Inout_ PVHID_VHF_CONTEXT Context
+    );
+
+NTSTATUS
+VhidVhfQueryStatus(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _Out_writes_bytes_(StatusBufferLength) PVOID StatusBuffer,
+    _In_ size_t StatusBufferLength,
+    _Out_ size_t* BytesWritten
     );
 
 EVT_VHF_READY_FOR_NEXT_READ_REPORT VhidEvtVhfReadyForNextReadReport;

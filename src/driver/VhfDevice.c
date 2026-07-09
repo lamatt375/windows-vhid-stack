@@ -1,5 +1,6 @@
 #include "VhfDevice.h"
 #include "../shared/VhidHidDescriptor.h"
+#include "../shared/VhidProtocol.h"
 #include "Trace.h"
 
 #define VHID_STATUS_VHF_CREATE_FAILED STATUS_DEVICE_NOT_READY
@@ -230,6 +231,7 @@ VhidVhfContextInit(
     Context->ReadyForNextReport = FALSE;
     Context->ReportSequenceState = (LONG)VhidReportSequenceDisabled;
     Context->LastReportSubmitStatus = STATUS_SUCCESS;
+    Context->LastTriggerStatus = STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -515,9 +517,77 @@ VhidVhfTriggerSmokeSequence(
             "Smoke trigger armed, waiting for VHF ready callback");
     }
 
+    Context->LastTriggerStatus = status;
+
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 
     return status;
+}
+
+NTSTATUS
+VhidVhfQueryStatus(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _Out_writes_bytes_(StatusBufferLength) PVOID StatusBuffer,
+    _In_ size_t StatusBufferLength,
+    _Out_ size_t* BytesWritten
+    )
+{
+    KIRQL oldIrql;
+    LONG state;
+    NTSTATUS triggerStatus;
+    PVHID_STATUS_REPORT statusReport;
+
+    if (Context == NULL || StatusBuffer == NULL || BytesWritten == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *BytesWritten = 0;
+
+    if (StatusBufferLength < sizeof(VHID_STATUS_REPORT)) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    statusReport = (PVHID_STATUS_REPORT)StatusBuffer;
+    RtlZeroMemory(statusReport, sizeof(*statusReport));
+
+    KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+
+    state = Context->ReportSequenceState;
+
+    if (Context->Deleting) {
+        triggerStatus = STATUS_DELETE_PENDING;
+    } else if (!Context->VhfStarted || Context->VhfHandle == NULL) {
+        triggerStatus = STATUS_DEVICE_NOT_READY;
+    } else if (Context->ReportSubmissionEnabled) {
+        triggerStatus = STATUS_DEVICE_BUSY;
+    } else if (state == (LONG)VhidReportSequenceComplete) {
+        triggerStatus = STATUS_ALREADY_COMMITTED;
+    } else if (state != (LONG)VhidReportSequenceDisabled) {
+        triggerStatus = STATUS_INVALID_DEVICE_STATE;
+    } else {
+        triggerStatus = STATUS_SUCCESS;
+    }
+
+    statusReport->Size = (ULONG)sizeof(*statusReport);
+    statusReport->ProtocolVersionMajor = VHID_PROTOCOL_VERSION_MAJOR;
+    statusReport->ProtocolVersionMinor = VHID_PROTOCOL_VERSION_MINOR;
+    statusReport->VhfHandlePresent = (Context->VhfHandle != NULL) ? 1u : 0u;
+    statusReport->Initialized = Context->Initialized ? 1u : 0u;
+    statusReport->VhfCreated = Context->VhfCreated ? 1u : 0u;
+    statusReport->VhfStarted = Context->VhfStarted ? 1u : 0u;
+    statusReport->Deleting = Context->Deleting ? 1u : 0u;
+    statusReport->ReportSubmissionEnabled = Context->ReportSubmissionEnabled ? 1u : 0u;
+    statusReport->ReadyForNextReport = Context->ReadyForNextReport ? 1u : 0u;
+    statusReport->ReportSequenceState = state;
+    statusReport->LastReportSubmitStatus = Context->LastReportSubmitStatus;
+    statusReport->LastTriggerStatus = Context->LastTriggerStatus;
+    statusReport->TriggerWouldBeAccepted = NT_SUCCESS(triggerStatus) ? 1u : 0u;
+    statusReport->TriggerRejectStatus = triggerStatus;
+
+    KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+
+    *BytesWritten = sizeof(*statusReport);
+    return STATUS_SUCCESS;
 }
 
 VOID

@@ -19,7 +19,11 @@ USAGE_Y = 0x31
 USAGE_WHEEL = 0x38
 
 REPORT_ID_KEYBOARD = 1
-REPORT_ID_MOUSE = 2
+REPORT_ID_RELATIVE_MOUSE = 2
+REPORT_ID_ABSOLUTE_MOUSE = 3
+
+ABSOLUTE_COORDINATE_MIN = 0
+ABSOLUTE_COORDINATE_MAX = 32767
 
 ITEM_TYPE_MAIN = 0
 ITEM_TYPE_GLOBAL = 1
@@ -32,7 +36,11 @@ MAIN_FEATURE = 0xB
 MAIN_END_COLLECTION = 0xC
 
 GLOBAL_USAGE_PAGE = 0x0
+GLOBAL_LOGICAL_MINIMUM = 0x1
+GLOBAL_LOGICAL_MAXIMUM = 0x2
+GLOBAL_REPORT_SIZE = 0x7
 GLOBAL_REPORT_ID = 0x8
+GLOBAL_REPORT_COUNT = 0x9
 
 LOCAL_USAGE = 0x0
 LOCAL_USAGE_MINIMUM = 0x1
@@ -67,6 +75,16 @@ def item_value(data: List[int]) -> int:
     return value
 
 
+def signed_item_value(data: List[int]) -> int:
+    if not data:
+        return 0
+    unsigned = item_value(data)
+    sign_bit = 1 << ((len(data) * 8) - 1)
+    if unsigned & sign_bit:
+        return unsigned - (1 << (len(data) * 8))
+    return unsigned
+
+
 def add_usage_range(usages: Set[Usage], usage_page: Optional[int], minimum: Optional[int], maximum: Optional[int]) -> None:
     if usage_page is None or minimum is None or maximum is None:
         return
@@ -78,6 +96,10 @@ def add_usage_range(usages: Set[Usage], usage_page: Optional[int], minimum: Opti
 
 def parse_descriptor(descriptor: List[int]) -> Dict[str, object]:
     usage_page: Optional[int] = None
+    logical_minimum: Optional[int] = None
+    logical_maximum: Optional[int] = None
+    report_size: Optional[int] = None
+    report_count: Optional[int] = None
     local_usages: List[Usage] = []
     usage_minimum: Optional[int] = None
     usage_maximum: Optional[int] = None
@@ -116,7 +138,9 @@ def parse_descriptor(descriptor: List[int]) -> Dict[str, object]:
         if index + data_size > len(descriptor):
             raise ValueError(f"item at byte {index - 1} overruns descriptor")
 
-        value = item_value(descriptor[index : index + data_size])
+        data = descriptor[index : index + data_size]
+        value = item_value(data)
+        signed_value = signed_item_value(data)
         index += data_size
 
         if item_type == ITEM_TYPE_MAIN:
@@ -131,6 +155,10 @@ def parse_descriptor(descriptor: List[int]) -> Dict[str, object]:
                         "flags": value,
                         "usages": expanded_usages,
                         "top_level_usage": top_level_usage,
+                        "logical_minimum": logical_minimum,
+                        "logical_maximum": logical_maximum,
+                        "report_size": report_size,
+                        "report_count": report_count,
                     }
                 )
             elif tag == MAIN_OUTPUT:
@@ -154,9 +182,17 @@ def parse_descriptor(descriptor: List[int]) -> Dict[str, object]:
         elif item_type == ITEM_TYPE_GLOBAL:
             if tag == GLOBAL_USAGE_PAGE:
                 usage_page = value
+            elif tag == GLOBAL_LOGICAL_MINIMUM:
+                logical_minimum = signed_value
+            elif tag == GLOBAL_LOGICAL_MAXIMUM:
+                logical_maximum = signed_value
+            elif tag == GLOBAL_REPORT_SIZE:
+                report_size = value
             elif tag == GLOBAL_REPORT_ID:
                 current_report_id = value
                 report_ids.add(value)
+            elif tag == GLOBAL_REPORT_COUNT:
+                report_count = value
         elif item_type == ITEM_TYPE_LOCAL:
             if tag == LOCAL_USAGE:
                 if usage_page is None:
@@ -183,10 +219,54 @@ def parse_descriptor(descriptor: List[int]) -> Dict[str, object]:
     }
 
 
+def require_button_usages(items: List[InputItem], report_name: str) -> Set[Usage]:
+    usages: Set[Usage] = set()
+    for item in items:
+        usages.update(item["usages"])
+
+    expected_buttons = {(USAGE_PAGE_BUTTON, button) for button in range(1, 4)}
+    missing_buttons = expected_buttons - usages
+    if missing_buttons:
+        raise ValueError(f"{report_name} button usages missing: {sorted(missing_buttons)}")
+    return expected_buttons
+
+
+def require_axis_item(
+    items: List[InputItem],
+    axis: int,
+    report_name: str,
+    *,
+    relative: bool,
+    report_size: int,
+    report_count: int,
+    logical_minimum: int,
+    logical_maximum: int,
+) -> None:
+    axis_usage = (USAGE_PAGE_GENERIC_DESKTOP, axis)
+    matching_items = [item for item in items if axis_usage in item["usages"]]
+    if not matching_items:
+        raise ValueError(f"{report_name} axis usage missing: {axis_usage}")
+
+    for item in matching_items:
+        flags = int(item["flags"])
+        is_relative = bool(flags & INPUT_FLAG_RELATIVE)
+        if is_relative != relative:
+            expected = "relative" if relative else "absolute"
+            raise ValueError(f"{report_name} axis is not {expected}: {axis_usage}")
+        if item["report_size"] != report_size:
+            raise ValueError(f"{report_name} axis {axis_usage} report size mismatch: {item['report_size']}")
+        if item["report_count"] != report_count:
+            raise ValueError(f"{report_name} axis {axis_usage} report count mismatch: {item['report_count']}")
+        if item["logical_minimum"] != logical_minimum:
+            raise ValueError(f"{report_name} axis {axis_usage} logical minimum mismatch: {item['logical_minimum']}")
+        if item["logical_maximum"] != logical_maximum:
+            raise ValueError(f"{report_name} axis {axis_usage} logical maximum mismatch: {item['logical_maximum']}")
+
+
 def validate_descriptor(descriptor: List[int]) -> Dict[str, object]:
     summary = parse_descriptor(descriptor)
 
-    expected_report_ids = {REPORT_ID_KEYBOARD, REPORT_ID_MOUSE}
+    expected_report_ids = {REPORT_ID_KEYBOARD, REPORT_ID_RELATIVE_MOUSE, REPORT_ID_ABSOLUTE_MOUSE}
     report_ids = summary["report_ids"]
     if report_ids != expected_report_ids:
         raise ValueError(f"expected report IDs {sorted(expected_report_ids)}, found {sorted(report_ids)}")
@@ -224,33 +304,57 @@ def validate_descriptor(descriptor: List[int]) -> Dict[str, object]:
     mouse_items = [item for item in input_items if item["top_level_usage"] == (USAGE_PAGE_GENERIC_DESKTOP, USAGE_MOUSE)]
     if not mouse_items:
         raise ValueError("mouse top-level collection has no input items")
-    unexpected_mouse_reports = {item["report_id"] for item in mouse_items if item["report_id"] != REPORT_ID_MOUSE}
+    unexpected_mouse_reports = {
+        item["report_id"]
+        for item in mouse_items
+        if item["report_id"] not in {REPORT_ID_RELATIVE_MOUSE, REPORT_ID_ABSOLUTE_MOUSE}
+    }
     if unexpected_mouse_reports:
         raise ValueError(f"mouse input uses unexpected report IDs: {sorted(unexpected_mouse_reports)}")
 
-    mouse_usages: Set[Usage] = set()
-    for item in mouse_items:
-        mouse_usages.update(item["usages"])
-
-    expected_buttons = {(USAGE_PAGE_BUTTON, button) for button in range(1, 4)}
-    missing_buttons = expected_buttons - mouse_usages
-    if missing_buttons:
-        raise ValueError(f"mouse button usages missing: {sorted(missing_buttons)}")
-
+    relative_mouse_items = [item for item in mouse_items if item["report_id"] == REPORT_ID_RELATIVE_MOUSE]
+    if not relative_mouse_items:
+        raise ValueError("relative mouse report has no input items")
+    relative_buttons = require_button_usages(relative_mouse_items, "relative mouse")
     for axis in (USAGE_X, USAGE_Y):
-        axis_usage = (USAGE_PAGE_GENERIC_DESKTOP, axis)
-        matching_items = [item for item in mouse_items if axis_usage in item["usages"]]
-        if not matching_items:
-            raise ValueError(f"mouse axis usage missing: {axis_usage}")
-        if not any(int(item["flags"]) & INPUT_FLAG_RELATIVE for item in matching_items):
-            raise ValueError(f"mouse axis is not relative: {axis_usage}")
+        require_axis_item(
+            relative_mouse_items,
+            axis,
+            "relative mouse",
+            relative=True,
+            report_size=8,
+            report_count=2,
+            logical_minimum=-127,
+            logical_maximum=127,
+        )
+
+    absolute_mouse_items = [item for item in mouse_items if item["report_id"] == REPORT_ID_ABSOLUTE_MOUSE]
+    if not absolute_mouse_items:
+        raise ValueError("absolute mouse report has no input items")
+    absolute_buttons = require_button_usages(absolute_mouse_items, "absolute mouse")
+    for axis in (USAGE_X, USAGE_Y):
+        require_axis_item(
+            absolute_mouse_items,
+            axis,
+            "absolute mouse",
+            relative=False,
+            report_size=16,
+            report_count=2,
+            logical_minimum=ABSOLUTE_COORDINATE_MIN,
+            logical_maximum=ABSOLUTE_COORDINATE_MAX,
+        )
 
     summary["report_ids"] = sorted(report_ids)
     summary["top_level_usages"] = sorted(found_top_level_usages)
-    summary["mouse_buttons"] = sorted(expected_buttons)
-    summary["mouse_relative_axes"] = sorted(
+    summary["relative_mouse_buttons"] = sorted(relative_buttons)
+    summary["relative_mouse_axes"] = sorted(
         {(USAGE_PAGE_GENERIC_DESKTOP, USAGE_X), (USAGE_PAGE_GENERIC_DESKTOP, USAGE_Y)}
     )
+    summary["absolute_mouse_buttons"] = sorted(absolute_buttons)
+    summary["absolute_mouse_axes"] = sorted(
+        {(USAGE_PAGE_GENERIC_DESKTOP, USAGE_X), (USAGE_PAGE_GENERIC_DESKTOP, USAGE_Y)}
+    )
+    summary["absolute_mouse_coordinate_range"] = (ABSOLUTE_COORDINATE_MIN, ABSOLUTE_COORDINATE_MAX)
     return summary
 
 
@@ -264,8 +368,13 @@ def main() -> int:
     print(f"Report IDs: {summary['report_ids']}")
     print(f"Top-level usages: {summary['top_level_usages']}")
     print(f"Input items: {len(summary['input_items'])}")
-    print(f"Mouse buttons: {summary['mouse_buttons']}")
-    print(f"Mouse relative axes: {summary['mouse_relative_axes']}")
+    print(f"Relative mouse buttons: {summary['relative_mouse_buttons']}")
+    print(f"Relative mouse axes: {summary['relative_mouse_axes']} (relative, 8-bit, -127..127)")
+    print(f"Absolute mouse buttons: {summary['absolute_mouse_buttons']}")
+    print(
+        f"Absolute mouse axes: {summary['absolute_mouse_axes']} "
+        f"(absolute, 16-bit, {ABSOLUTE_COORDINATE_MIN}..{ABSOLUTE_COORDINATE_MAX})"
+    )
     print("Wheel usage: absent")
     print("Output items: 0")
     print("Feature items: 0")

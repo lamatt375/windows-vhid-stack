@@ -102,7 +102,7 @@ VhidVhfTryBeginReadySubmit(
                    Context->VhfHandle == NULL) {
             *BeginStatus = STATUS_DEVICE_NOT_READY;
         } else if (!Context->ReadyForNextReport) {
-            *BeginStatus = STATUS_DEVICE_NOT_READY;
+            *BeginStatus = STATUS_SUCCESS;
         } else {
             Context->ReadyForNextReport = FALSE;
             InterlockedExchange(
@@ -466,6 +466,17 @@ VhidVhfSubmitNextReadyReport(
     }
 }
 
+static
+VOID
+VhidVhfDrainReadyReports(
+    _Inout_ PVHID_VHF_CONTEXT Context
+    )
+{
+    while (VhidVhfSubmitNextReadyReport(Context)) {
+        ;
+    }
+}
+
 NTSTATUS
 VhidVhfTriggerSmokeSequence(
     _Inout_ PVHID_VHF_CONTEXT Context
@@ -567,6 +578,8 @@ VhidVhfTriggerSmokeSequence(
         "Keyboard neutral pre-clear report kickstart submitted, reportId=%u",
         VHID_KEYBOARD_REPORT_ID);
 
+    VhidVhfDrainReadyReports(Context);
+
     return STATUS_SUCCESS;
 }
 
@@ -655,7 +668,7 @@ VhidEvtVhfReadyForNextReadReport(
         return;
     }
 
-    VhidVhfSubmitNextReadyReport(context);
+    VhidVhfDrainReadyReports(context);
 }
 
 VOID

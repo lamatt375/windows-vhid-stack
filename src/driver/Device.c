@@ -67,6 +67,46 @@ VhidCreateDevice(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+VhidHandleMoveAbsoluteRequest(
+    _Inout_ PVHID_DEVICE_CONTEXT Context,
+    _In_ WDFREQUEST Request,
+    _In_ size_t OutputBufferLength,
+    _In_ size_t InputBufferLength
+    )
+{
+    NTSTATUS status;
+    PVOID inputBuffer;
+
+    if (InputBufferLength != sizeof(VHID_MOVE_ABSOLUTE_REQUEST) ||
+        OutputBufferLength != 0) {
+        status = STATUS_INVALID_PARAMETER;
+        VHID_LOG_ERROR(
+            "MoveAbsolute rejected, invalid buffers input=%Iu output=%Iu status=0x%08X",
+            InputBufferLength,
+            OutputBufferLength,
+            status);
+        return status;
+    }
+
+    status = WdfRequestRetrieveInputBuffer(
+        Request,
+        sizeof(VHID_MOVE_ABSOLUTE_REQUEST),
+        &inputBuffer,
+        NULL);
+    if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR(
+            "MoveAbsolute rejected, input retrieval failed status=0x%08X",
+            status);
+        return status;
+    }
+
+    return VhidVhfMoveAbsolute(
+        &Context->Vhf,
+        (const VHID_MOVE_ABSOLUTE_REQUEST*)inputBuffer);
+}
+
 VOID
 VhidEvtIoDeviceControl(
     _In_ WDFQUEUE Queue,
@@ -113,6 +153,20 @@ VhidEvtIoDeviceControl(
                     "Smoke trigger IOCTL failed, status=0x%08X",
                     status);
             }
+        }
+    } else if (IoControlCode == VHID_IOCTL_MOVE_ABSOLUTE) {
+        VHID_LOG_INFO("%s", "MoveAbsolute IOCTL received");
+        status = VhidHandleMoveAbsoluteRequest(
+            context,
+            Request,
+            OutputBufferLength,
+            InputBufferLength);
+        if (NT_SUCCESS(status)) {
+            VHID_LOG_INFO("%s", "MoveAbsolute IOCTL accepted");
+        } else {
+            VHID_LOG_ERROR(
+                "MoveAbsolute IOCTL failed, status=0x%08X",
+                status);
         }
     } else if (IoControlCode == VHID_IOCTL_QUERY_STATUS) {
         if (InputBufferLength != 0) {

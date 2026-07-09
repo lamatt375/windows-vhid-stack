@@ -5,10 +5,12 @@
 
 #define VHID_STATUS_VHF_CREATE_FAILED STATUS_DEVICE_NOT_READY
 #define VHID_STATUS_VHF_START_FAILED STATUS_DEVICE_POWER_FAILURE
-#define VHID_KEYBOARD_REPORT_ID ((UCHAR)0x01)
-#define VHID_MOUSE_REPORT_ID ((UCHAR)0x02)
+#define VHID_KEYBOARD_REPORT_ID ((UCHAR)VHID_HID_REPORT_ID_KEYBOARD)
+#define VHID_MOUSE_REPORT_ID ((UCHAR)VHID_HID_REPORT_ID_RELATIVE_MOUSE)
+#define VHID_ABSOLUTE_MOUSE_REPORT_ID ((UCHAR)VHID_HID_REPORT_ID_ABSOLUTE_MOUSE)
 #define VHID_KEYBOARD_INPUT_REPORT_LENGTH 9u
 #define VHID_MOUSE_INPUT_REPORT_LENGTH 4u
+#define VHID_ABSOLUTE_MOUSE_INPUT_REPORT_LENGTH VHID_HID_ABSOLUTE_MOUSE_REPORT_LENGTH
 
 static UCHAR VhidNeutralKeyboardReport[VHID_KEYBOARD_INPUT_REPORT_LENGTH] = {
     VHID_KEYBOARD_REPORT_ID, 0x00, 0x00, 0x00, 0x00,
@@ -32,6 +34,8 @@ C_ASSERT(sizeof(VhidNeutralKeyboardReport) == VHID_KEYBOARD_INPUT_REPORT_LENGTH)
 C_ASSERT(sizeof(VhidKeyboardAReport) == VHID_KEYBOARD_INPUT_REPORT_LENGTH);
 C_ASSERT(sizeof(VhidNeutralMouseReport) == VHID_MOUSE_INPUT_REPORT_LENGTH);
 C_ASSERT(sizeof(VhidMouseMoveRightReport) == VHID_MOUSE_INPUT_REPORT_LENGTH);
+C_ASSERT(VHID_ABSOLUTE_MOUSE_INPUT_REPORT_LENGTH == 6u);
+C_ASSERT(VHID_MOVE_ABSOLUTE_COORDINATE_MAX == VHID_HID_ABSOLUTE_COORDINATE_MAX);
 
 static
 BOOLEAN
@@ -59,6 +63,56 @@ VhidIsExpectedReport(
 }
 
 static
+USHORT
+VhidReadUshortLittleEndian(
+    _In_reads_bytes_(2) const UCHAR* Bytes
+    )
+{
+    return (USHORT)(Bytes[0] | ((USHORT)Bytes[1] << 8));
+}
+
+static
+BOOLEAN
+VhidIsValidAbsoluteMoveReport(
+    _In_reads_bytes_(ReportLength) PUCHAR Report,
+    _In_ ULONG ReportLength
+    )
+{
+    ULONG x;
+    ULONG y;
+
+    if (Report == NULL || ReportLength != VHID_ABSOLUTE_MOUSE_INPUT_REPORT_LENGTH) {
+        return FALSE;
+    }
+
+    if (Report[0] != VHID_ABSOLUTE_MOUSE_REPORT_ID || Report[1] != 0x00) {
+        return FALSE;
+    }
+
+    x = VhidReadUshortLittleEndian(&Report[2]);
+    y = VhidReadUshortLittleEndian(&Report[4]);
+
+    return x <= VHID_HID_ABSOLUTE_COORDINATE_MAX &&
+           y <= VHID_HID_ABSOLUTE_COORDINATE_MAX;
+}
+
+static
+VOID
+VhidBuildAbsoluteMoveReport(
+    _Out_writes_bytes_(VHID_ABSOLUTE_MOUSE_INPUT_REPORT_LENGTH) UCHAR* Report,
+    _In_ ULONG X,
+    _In_ ULONG Y
+    )
+{
+    Report[0] = VHID_ABSOLUTE_MOUSE_REPORT_ID;
+    Report[1] = 0x00;
+    Report[2] = (UCHAR)(X & 0xFFu);
+    Report[3] = (UCHAR)((X >> 8) & 0xFFu);
+    Report[4] = (UCHAR)(Y & 0xFFu);
+    Report[5] = (UCHAR)((Y >> 8) & 0xFFu);
+}
+
+static
 VOID
 VhidVhfDisableReportSequence(
     _Inout_ PVHID_VHF_CONTEXT Context,
@@ -71,8 +125,21 @@ VhidVhfDisableReportSequence(
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
     Context->LastReportSubmitStatus = Status;
     Context->ReportSubmissionEnabled = FALSE;
+    Context->CurrentCommandType = VHID_COMMAND_NONE;
+    Context->CurrentCommandSequenceId = 0;
     InterlockedExchange(&Context->ReportSequenceState, (LONG)State);
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+}
+
+static
+VHID_REPORT_SEQUENCE_STATE
+VhidVhfIdleState(
+    _In_ PVHID_VHF_CONTEXT Context
+    )
+{
+    return Context->SmokeSequenceCompleted ?
+        VhidReportSequenceComplete :
+        VhidReportSequenceDisabled;
 }
 
 static
@@ -135,24 +202,68 @@ VhidVhfCompleteSubmit(
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
 
     Context->LastReportSubmitStatus = Status;
+    if (Context->CurrentCommandType != VHID_COMMAND_NONE) {
+        Context->LastCommandStatus = Status;
+    }
     if (UpdateTriggerStatus) {
         Context->LastTriggerStatus = Status;
     }
 
     if (!NT_SUCCESS(Status)) {
         Context->ReportSubmissionEnabled = FALSE;
+        Context->CurrentCommandType = VHID_COMMAND_NONE;
+        Context->CurrentCommandSequenceId = 0;
         InterlockedExchange(
             &Context->ReportSequenceState,
             (LONG)VhidReportSequenceFailed);
     } else if (!Context->Deleting) {
         if (DisableOnSuccess) {
             Context->ReportSubmissionEnabled = FALSE;
+            if (SuccessState == VhidReportSequenceComplete) {
+                Context->SmokeSequenceCompleted = TRUE;
+            }
+            Context->CurrentCommandType = VHID_COMMAND_NONE;
+            Context->CurrentCommandSequenceId = 0;
         }
 
         InterlockedExchange(
             &Context->ReportSequenceState,
             (LONG)SuccessState);
     }
+
+    if (Context->ActiveSubmissions > 0) {
+        Context->ActiveSubmissions--;
+    }
+
+    if (Context->ActiveSubmissions == 0) {
+        KeSetEvent(&Context->NoActiveSubmissionsEvent, IO_NO_INCREMENT, FALSE);
+    }
+
+    KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+}
+
+static
+VOID
+VhidVhfCompleteMoveAbsolute(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ NTSTATUS Status
+    )
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+
+    Context->LastReportSubmitStatus = Status;
+    Context->LastCommandStatus = Status;
+    Context->ReportSubmissionEnabled = FALSE;
+    Context->CurrentCommandType = VHID_COMMAND_NONE;
+    Context->CurrentCommandSequenceId = 0;
+
+    InterlockedExchange(
+        &Context->ReportSequenceState,
+        NT_SUCCESS(Status) ?
+            (LONG)VhidVhfIdleState(Context) :
+            (LONG)VhidReportSequenceFailed);
 
     if (Context->ActiveSubmissions > 0) {
         Context->ActiveSubmissions--;
@@ -221,6 +332,32 @@ VhidVhfSubmitSequencedReport(
     return VhfReadReportSubmit(VhfHandle, &packet);
 }
 
+static
+NTSTATUS
+VhidVhfSubmitAbsoluteMoveReport(
+    _In_ VHFHANDLE VhfHandle,
+    _In_reads_bytes_(ReportLength) PUCHAR Report,
+    _In_ ULONG ReportLength
+    )
+{
+    HID_XFER_PACKET packet;
+
+    if (VhfHandle == NULL) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    if (!VhidIsValidAbsoluteMoveReport(Report, ReportLength)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&packet, sizeof(packet));
+    packet.reportBuffer = Report;
+    packet.reportBufferLen = ReportLength;
+    packet.reportId = VHID_ABSOLUTE_MOUSE_REPORT_ID;
+
+    return VhfReadReportSubmit(VhfHandle, &packet);
+}
+
 VOID
 VhidVhfContextInit(
     _Out_ PVHID_VHF_CONTEXT Context
@@ -236,6 +373,7 @@ VhidVhfContextInit(
     Context->ReportSequenceState = (LONG)VhidReportSequenceDisabled;
     Context->LastReportSubmitStatus = STATUS_SUCCESS;
     Context->LastTriggerStatus = STATUS_SUCCESS;
+    Context->LastCommandStatus = STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -509,12 +647,12 @@ VhidVhfTriggerSmokeSequence(
         VHID_LOG_ERROR(
             "Smoke trigger rejected, VHF not ready status=0x%08X",
             status);
-    } else if (Context->ReportSubmissionEnabled) {
+    } else if (Context->ReportSubmissionEnabled || Context->ActiveSubmissions > 0) {
         status = STATUS_DEVICE_BUSY;
         VHID_LOG_ERROR(
             "Smoke trigger rejected, busy/running status=0x%08X",
             status);
-    } else if (state == (LONG)VhidReportSequenceComplete) {
+    } else if (Context->SmokeSequenceCompleted) {
         status = STATUS_ALREADY_COMMITTED;
         VHID_LOG_ERROR(
             "Smoke trigger rejected, already completed status=0x%08X",
@@ -527,6 +665,11 @@ VhidVhfTriggerSmokeSequence(
             status);
     } else {
         Context->LastReportSubmitStatus = STATUS_SUCCESS;
+        Context->LastCommandType = VHID_COMMAND_SMOKE_SEQUENCE;
+        Context->LastCommandSequenceId = 0;
+        Context->LastCommandStatus = STATUS_PENDING;
+        Context->CurrentCommandType = VHID_COMMAND_SMOKE_SEQUENCE;
+        Context->CurrentCommandSequenceId = 0;
         Context->ReportSubmissionEnabled = TRUE;
         Context->ReadyForNextReport = FALSE;
         InterlockedExchange(
@@ -583,6 +726,156 @@ VhidVhfTriggerSmokeSequence(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+VhidValidateMoveAbsoluteRequest(
+    _In_ const VHID_MOVE_ABSOLUTE_REQUEST* Request
+    )
+{
+    if (Request == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Request->Size != sizeof(*Request) ||
+        Request->ProtocolVersionMajor != VHID_PROTOCOL_VERSION_MAJOR ||
+        Request->ProtocolVersionMinor != VHID_PROTOCOL_VERSION_MINOR ||
+        Request->CommandType != VHID_COMMAND_MOVE_ABSOLUTE) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Request->Reserved0 != 0 ||
+        Request->Reserved1 != 0 ||
+        Request->Reserved2 != 0 ||
+        Request->Reserved3 != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Request->X > VHID_MOVE_ABSOLUTE_COORDINATE_MAX ||
+        Request->Y > VHID_MOVE_ABSOLUTE_COORDINATE_MAX) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+VhidVhfMoveAbsolute(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ const VHID_MOVE_ABSOLUTE_REQUEST* Request
+    )
+{
+    KIRQL oldIrql;
+    LONG state;
+    NTSTATUS status;
+    VHFHANDLE vhfHandle;
+    BOOLEAN submitReport;
+
+    if (Context == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    status = VhidValidateMoveAbsoluteRequest(Request);
+    if (!NT_SUCCESS(status)) {
+        KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+        Context->LastCommandType = (Request != NULL) ? Request->CommandType : VHID_COMMAND_MOVE_ABSOLUTE;
+        Context->LastCommandSequenceId = (Request != NULL) ? Request->SequenceId : 0;
+        Context->LastCommandStatus = status;
+        KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+        VHID_LOG_ERROR(
+            "MoveAbsolute rejected, invalid request status=0x%08X",
+            status);
+        return status;
+    }
+
+    vhfHandle = NULL;
+    submitReport = FALSE;
+
+    KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+
+    state = Context->ReportSequenceState;
+
+    if (Context->Deleting) {
+        status = STATUS_DELETE_PENDING;
+    } else if (!Context->VhfStarted || Context->VhfHandle == NULL) {
+        status = STATUS_DEVICE_NOT_READY;
+    } else if (Context->ReportSubmissionEnabled || Context->ActiveSubmissions > 0) {
+        status = STATUS_DEVICE_BUSY;
+    } else if (state != (LONG)VhidReportSequenceDisabled &&
+               state != (LONG)VhidReportSequenceComplete) {
+        status = STATUS_INVALID_DEVICE_STATE;
+    } else {
+        VhidBuildAbsoluteMoveReport(
+            Context->AbsoluteMoveReport,
+            Request->X,
+            Request->Y);
+        Context->LastReportSubmitStatus = STATUS_SUCCESS;
+        Context->LastCommandType = VHID_COMMAND_MOVE_ABSOLUTE;
+        Context->LastCommandSequenceId = Request->SequenceId;
+        Context->LastCommandStatus = STATUS_PENDING;
+        Context->CurrentCommandType = VHID_COMMAND_MOVE_ABSOLUTE;
+        Context->CurrentCommandSequenceId = Request->SequenceId;
+        Context->ReportSubmissionEnabled = TRUE;
+        Context->ReadyForNextReport = FALSE;
+        InterlockedExchange(
+            &Context->ReportSequenceState,
+            (LONG)VhidReportMoveAbsoluteSubmitting);
+        Context->ActiveSubmissions++;
+        KeClearEvent(&Context->NoActiveSubmissionsEvent);
+        vhfHandle = Context->VhfHandle;
+        submitReport = TRUE;
+        status = STATUS_SUCCESS;
+    }
+
+    if (!submitReport) {
+        Context->LastCommandType = VHID_COMMAND_MOVE_ABSOLUTE;
+        Context->LastCommandSequenceId = Request->SequenceId;
+        Context->LastCommandStatus = status;
+    }
+
+    KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+
+    if (!submitReport) {
+        VHID_LOG_ERROR(
+            "MoveAbsolute rejected, x=%lu y=%lu status=0x%08X",
+            Request->X,
+            Request->Y,
+            status);
+        return status;
+    }
+
+    VHID_LOG_INFO(
+        "MoveAbsolute submit attempt, x=%lu y=%lu reportId=%u sequenceId=%lu",
+        Request->X,
+        Request->Y,
+        VHID_ABSOLUTE_MOUSE_REPORT_ID,
+        Request->SequenceId);
+
+    status = VhidVhfSubmitAbsoluteMoveReport(
+        vhfHandle,
+        Context->AbsoluteMoveReport,
+        sizeof(Context->AbsoluteMoveReport));
+
+    VhidVhfCompleteMoveAbsolute(Context, status);
+
+    if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR(
+            "MoveAbsolute submit failed, x=%lu y=%lu status=0x%08X",
+            Request->X,
+            Request->Y,
+            status);
+        return status;
+    }
+
+    VHID_LOG_INFO(
+        "MoveAbsolute submitted, x=%lu y=%lu reportId=%u sequenceId=%lu",
+        Request->X,
+        Request->Y,
+        VHID_ABSOLUTE_MOUSE_REPORT_ID,
+        Request->SequenceId);
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 VhidVhfQueryStatus(
     _Inout_ PVHID_VHF_CONTEXT Context,
@@ -617,9 +910,9 @@ VhidVhfQueryStatus(
         triggerStatus = STATUS_DELETE_PENDING;
     } else if (!Context->VhfStarted || Context->VhfHandle == NULL) {
         triggerStatus = STATUS_DEVICE_NOT_READY;
-    } else if (Context->ReportSubmissionEnabled) {
+    } else if (Context->ReportSubmissionEnabled || Context->ActiveSubmissions > 0) {
         triggerStatus = STATUS_DEVICE_BUSY;
-    } else if (state == (LONG)VhidReportSequenceComplete) {
+    } else if (Context->SmokeSequenceCompleted) {
         triggerStatus = STATUS_ALREADY_COMMITTED;
     } else if (state != (LONG)VhidReportSequenceDisabled) {
         triggerStatus = STATUS_INVALID_DEVICE_STATE;
@@ -642,6 +935,12 @@ VhidVhfQueryStatus(
     statusReport->LastTriggerStatus = Context->LastTriggerStatus;
     statusReport->TriggerWouldBeAccepted = NT_SUCCESS(triggerStatus) ? 1u : 0u;
     statusReport->TriggerRejectStatus = triggerStatus;
+    statusReport->SmokeSequenceCompleted = Context->SmokeSequenceCompleted ? 1u : 0u;
+    statusReport->CurrentCommandType = Context->CurrentCommandType;
+    statusReport->CurrentCommandSequenceId = Context->CurrentCommandSequenceId;
+    statusReport->LastCommandType = Context->LastCommandType;
+    statusReport->LastCommandSequenceId = Context->LastCommandSequenceId;
+    statusReport->LastCommandStatus = Context->LastCommandStatus;
 
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 
@@ -688,6 +987,8 @@ VhidVhfCleanup(
     Context->Deleting = TRUE;
     Context->ReportSubmissionEnabled = FALSE;
     Context->ReadyForNextReport = FALSE;
+    Context->CurrentCommandType = VHID_COMMAND_NONE;
+    Context->CurrentCommandSequenceId = 0;
     InterlockedExchange(
         &Context->ReportSequenceState,
         (LONG)VhidReportSequenceDisabled);
@@ -709,6 +1010,8 @@ VhidVhfCleanup(
     Context->VhfHandle = NULL;
     Context->ReportSubmissionEnabled = FALSE;
     Context->ReadyForNextReport = FALSE;
+    Context->CurrentCommandType = VHID_COMMAND_NONE;
+    Context->CurrentCommandSequenceId = 0;
     InterlockedExchange(
         &Context->ReportSequenceState,
         (LONG)VhidReportSequenceDisabled);

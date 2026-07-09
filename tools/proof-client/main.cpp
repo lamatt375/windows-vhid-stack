@@ -2,6 +2,9 @@
 #include <setupapi.h>
 #include <initguid.h>
 
+#include <cerrno>
+#include <cstdlib>
+#include <cwchar>
 #include <iostream>
 #include <string>
 
@@ -112,6 +115,22 @@ static const wchar_t* SequenceStateName(LONG state)
         return L"Complete";
     case 16:
         return L"Failed";
+    case 17:
+        return L"MoveAbsoluteSubmitting";
+    default:
+        return L"Unknown";
+    }
+}
+
+static const wchar_t* CommandTypeName(ULONG commandType)
+{
+    switch (commandType) {
+    case VHID_COMMAND_NONE:
+        return L"None";
+    case VHID_COMMAND_SMOKE_SEQUENCE:
+        return L"SmokeSequence";
+    case VHID_COMMAND_MOVE_ABSOLUTE:
+        return L"MoveAbsolute";
     default:
         return L"Unknown";
     }
@@ -127,6 +146,30 @@ static void PrintStatusValue(const wchar_t* name, LONG status)
     std::wcout << name << L"=0x" << std::hex << std::uppercase
                << static_cast<unsigned long>(status)
                << std::nouppercase << std::dec << L"\n";
+}
+
+static bool ParseCoordinate(const wchar_t* text, ULONG* value)
+{
+    wchar_t* end;
+    unsigned long parsed;
+
+    if (text == nullptr || value == nullptr || *text == L'\0' || *text == L'-') {
+        return false;
+    }
+
+    errno = 0;
+    end = nullptr;
+    parsed = std::wcstoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != L'\0') {
+        return false;
+    }
+
+    if (parsed > VHID_MOVE_ABSOLUTE_COORDINATE_MAX) {
+        return false;
+    }
+
+    *value = static_cast<ULONG>(parsed);
+    return true;
 }
 
 static int RunTrigger(HANDLE device)
@@ -153,6 +196,43 @@ static int RunTrigger(HANDLE device)
     }
 
     std::wcout << L"trigger accepted: DeviceIoControl succeeded\n";
+    return 0;
+}
+
+static int RunMoveAbsolute(HANDLE device, ULONG x, ULONG y)
+{
+    VHID_MOVE_ABSOLUTE_REQUEST request;
+    BOOL ok;
+    DWORD bytesReturned;
+
+    ZeroMemory(&request, sizeof(request));
+    request.Size = sizeof(request);
+    request.ProtocolVersionMajor = VHID_PROTOCOL_VERSION_MAJOR;
+    request.ProtocolVersionMinor = VHID_PROTOCOL_VERSION_MINOR;
+    request.CommandType = VHID_COMMAND_MOVE_ABSOLUTE;
+    request.SequenceId = 1;
+    request.X = x;
+    request.Y = y;
+
+    bytesReturned = 0;
+    std::wcout << L"sending move-abs x=" << x << L" y=" << y << L"\n";
+    ok = DeviceIoControl(
+        device,
+        VHID_IOCTL_MOVE_ABSOLUTE,
+        &request,
+        sizeof(request),
+        nullptr,
+        0,
+        &bytesReturned,
+        nullptr);
+
+    if (!ok) {
+        DWORD error = GetLastError();
+        std::wcerr << L"move-abs failed: DeviceIoControl failed, error=" << error << L"\n";
+        return 8;
+    }
+
+    std::wcout << L"move-abs accepted: DeviceIoControl succeeded\n";
     return 0;
 }
 
@@ -205,7 +285,20 @@ static int RunStatus(HANDLE device)
     PrintStatusValue(L"lastTriggerStatus", report.LastTriggerStatus);
     PrintFlag(L"triggerWouldBeAccepted", report.TriggerWouldBeAccepted);
     PrintStatusValue(L"triggerRejectStatus", report.TriggerRejectStatus);
+    PrintFlag(L"smokeSequenceCompleted", report.SmokeSequenceCompleted);
+    std::wcout << L"currentCommandType=" << report.CurrentCommandType
+               << L" (" << CommandTypeName(report.CurrentCommandType) << L")\n";
+    std::wcout << L"currentCommandSequenceId=" << report.CurrentCommandSequenceId << L"\n";
+    std::wcout << L"lastCommandType=" << report.LastCommandType
+               << L" (" << CommandTypeName(report.LastCommandType) << L")\n";
+    std::wcout << L"lastCommandSequenceId=" << report.LastCommandSequenceId << L"\n";
+    PrintStatusValue(L"lastCommandStatus", report.LastCommandStatus);
     return 0;
+}
+
+static void PrintUsage()
+{
+    std::wcerr << L"usage: proof-client.exe trigger|status|move-abs <x> <y>\n";
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -214,16 +307,33 @@ int wmain(int argc, wchar_t** argv)
     std::wstring devicePath;
     HANDLE device;
     DWORD desiredAccess;
+    ULONG x;
+    ULONG y;
     int result;
 
-    if (argc != 2) {
-        std::wcerr << L"usage: proof-client.exe trigger|status\n";
+    if (argc < 2) {
+        PrintUsage();
         return 2;
     }
 
     command = argv[1];
-    if (command != L"trigger" && command != L"status") {
-        std::wcerr << L"usage: proof-client.exe trigger|status\n";
+    x = 0;
+    y = 0;
+
+    if (command == L"trigger" || command == L"status") {
+        if (argc != 2) {
+            PrintUsage();
+            return 2;
+        }
+    } else if (command == L"move-abs") {
+        if (argc != 4 || !ParseCoordinate(argv[2], &x) || !ParseCoordinate(argv[3], &y)) {
+            PrintUsage();
+            std::wcerr << L"move-abs coordinates must be decimal values from 0 to "
+                       << VHID_MOVE_ABSOLUTE_COORDINATE_MAX << L"\n";
+            return 2;
+        }
+    } else {
+        PrintUsage();
         return 2;
     }
 
@@ -250,6 +360,8 @@ int wmain(int argc, wchar_t** argv)
 
     if (command == L"status") {
         result = RunStatus(device);
+    } else if (command == L"move-abs") {
+        result = RunMoveAbsolute(device, x, y);
     } else {
         result = RunTrigger(device);
     }

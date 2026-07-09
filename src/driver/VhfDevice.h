@@ -4,6 +4,9 @@
 #include <wdf.h>
 #include <vhf.h>
 
+#include "../shared/VhidHidDescriptor.h"
+#include "../shared/VhidProtocol.h"
+
 typedef enum _VHID_REPORT_SEQUENCE_STATE {
     VhidReportSequenceDisabled = 0,
     VhidReportKeyboardPreClearPending = 1,
@@ -21,7 +24,8 @@ typedef enum _VHID_REPORT_SEQUENCE_STATE {
     VhidReportKeyboardFinalClearPending = 13,
     VhidReportKeyboardFinalClearSubmitting = 14,
     VhidReportSequenceComplete = 15,
-    VhidReportSequenceFailed = 16
+    VhidReportSequenceFailed = 16,
+    VhidReportMoveAbsoluteSubmitting = 17
 } VHID_REPORT_SEQUENCE_STATE;
 
 typedef struct _VHID_VHF_CONTEXT {
@@ -31,9 +35,16 @@ typedef struct _VHID_VHF_CONTEXT {
     BOOLEAN VhfStarted;
     BOOLEAN ReportSubmissionEnabled;
     BOOLEAN ReadyForNextReport;
+    BOOLEAN SmokeSequenceCompleted;
     volatile LONG ReportSequenceState;
     NTSTATUS LastReportSubmitStatus;
     NTSTATUS LastTriggerStatus;
+    ULONG CurrentCommandType;
+    ULONG CurrentCommandSequenceId;
+    ULONG LastCommandType;
+    ULONG LastCommandSequenceId;
+    NTSTATUS LastCommandStatus;
+    UCHAR AbsoluteMoveReport[VHID_HID_ABSOLUTE_MOUSE_REPORT_LENGTH];
     KSPIN_LOCK SubmissionLock;
     KEVENT NoActiveSubmissionsEvent;
     LONG ActiveSubmissions;
@@ -54,6 +65,12 @@ VhidVhfInitialize(
 NTSTATUS
 VhidVhfTriggerSmokeSequence(
     _Inout_ PVHID_VHF_CONTEXT Context
+    );
+
+NTSTATUS
+VhidVhfMoveAbsolute(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ const VHID_MOVE_ABSOLUTE_REQUEST* Request
     );
 
 NTSTATUS

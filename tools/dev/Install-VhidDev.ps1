@@ -7,6 +7,7 @@ param(
     [string]$InfPath,
     [string]$SysPath,
     [string]$CatPath,
+    [string]$PackageRoot,
     [string]$ProofClientPath,
     [string]$CertificateSubject = 'Windows VHID Stack Test Certificate',
     [string]$DeviceInstanceId = 'ROOT\WINDOWSVHIDSTACKVIRTUALINPUT\0000',
@@ -25,8 +26,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $DriverRoot) { $DriverRoot = Join-Path $RepoRoot 'src\driver' }
 if (-not $InfPath) { $InfPath = Join-Path $DriverRoot 'VirtualInput.inf' }
 if (-not $SysPath) { $SysPath = Join-Path $DriverRoot 'x64\Debug\VirtualInput.sys' }
-if (-not $CatPath) { $CatPath = Join-Path $DriverRoot 'VirtualInput.cat' }
+if (-not $PackageRoot) { $PackageRoot = 'C:\vhid-lab\pkg\windows-vhid-stack' }
 if (-not $ProofClientPath) { $ProofClientPath = Join-Path $RepoRoot 'tools\proof-client\x64\Debug\proof-client.exe' }
+
 
 $DryRun = -not $Apply
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
@@ -37,6 +39,18 @@ function Write-Log {
     $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Message
     Write-Host $line
     Add-Content -LiteralPath $script:LogPath -Value $line
+}
+
+function Get-NormalizedAbsolutePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'Path must not be empty.' }
+    if ($Path -notmatch '^[A-Za-z]:[\\/]') {
+        throw "Path must be absolute and drive-qualified, got: $Path"
+    }
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    return $full.TrimEnd('\')
 }
 
 function Test-Administrator {
@@ -131,6 +145,83 @@ function Invoke-LoggedCommand {
     return $exitCode
 }
 
+function Assert-SafePackageRoot {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $full = Get-NormalizedAbsolutePath -Path $Path
+    $allowedParent = Get-NormalizedAbsolutePath -Path 'C:\vhid-lab\pkg'
+    $repo = Get-NormalizedAbsolutePath -Path $RepoRoot
+    $driver = Get-NormalizedAbsolutePath -Path $DriverRoot
+    $root = ([System.IO.Path]::GetPathRoot($full)).TrimEnd('\')
+    $labRoot = Get-NormalizedAbsolutePath -Path 'C:\vhid-lab'
+    $systemRoot = if ($env:SystemRoot) { Get-NormalizedAbsolutePath -Path $env:SystemRoot } else { '' }
+    $userProfile = if ($env:USERPROFILE) { Get-NormalizedAbsolutePath -Path $env:USERPROFILE } else { '' }
+    $tempRoot = if ($env:TEMP -and $env:TEMP -match '^[A-Za-z]:[\\/]') { Get-NormalizedAbsolutePath -Path $env:TEMP } else { '' }
+    $tmpRoot = if ($env:TMP -and $env:TMP -match '^[A-Za-z]:[\\/]') { Get-NormalizedAbsolutePath -Path $env:TMP } else { '' }
+
+    if ($full -ieq $root) { throw "Refusing to use drive root as PackageRoot: $full" }
+    if ($full -ieq $labRoot) { throw "Refusing to use lab root as PackageRoot: $full" }
+    if ($full -ieq $allowedParent) { throw "Refusing to use staging parent as PackageRoot: $full" }
+    if (-not $full.StartsWith($allowedParent + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "PackageRoot must be a child under $allowedParent, got: $full"
+    }
+    if ($full -ieq $repo -or $full.StartsWith($repo + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to use repo path or descendant as PackageRoot: $full"
+    }
+    if ($full -ieq $driver -or $full.StartsWith($driver + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to use driver path or descendant as PackageRoot: $full"
+    }
+    if ($systemRoot -and ($full -ieq $systemRoot -or $full.StartsWith($systemRoot + '\', [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw "Refusing to use system path as PackageRoot: $full"
+    }
+    if ($userProfile -and ($full -ieq $userProfile -or $full.StartsWith($userProfile + '\', [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw "Refusing to use user profile path as PackageRoot: $full"
+    }
+    if ($tempRoot -and ($full -ieq $tempRoot -or $full.StartsWith($tempRoot + '\', [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw "Refusing to use temp path as PackageRoot: $full"
+    }
+    if ($tmpRoot -and ($full -ieq $tmpRoot -or $full.StartsWith($tmpRoot + '\', [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw "Refusing to use temp path as PackageRoot: $full"
+    }
+
+    return $full
+}
+
+function Initialize-PackageStage {
+    $script:PackageRoot = Assert-SafePackageRoot -Path $PackageRoot
+    $script:StagedInfPath = Join-Path $script:PackageRoot 'VirtualInput.inf'
+    $script:StagedSysPath = Join-Path $script:PackageRoot 'VirtualInput.sys'
+    if (-not $CatPath) {
+        $script:StagedCatPath = Join-Path $script:PackageRoot 'VirtualInput.cat'
+    } else {
+        $script:StagedCatPath = Join-Path $script:PackageRoot (Split-Path -Leaf $CatPath)
+    }
+
+    Write-Log "PackageRoot=$script:PackageRoot"
+    Write-Log "SourceInf=$InfPath"
+    Write-Log "SourceSys=$SysPath"
+    Write-Log "StagedInf=$script:StagedInfPath"
+    Write-Log "StagedSys=$script:StagedSysPath"
+    Write-Log "StagedCat=$script:StagedCatPath"
+
+    if ($DryRun) {
+        Write-Log "DRY-RUN: would clean/create package staging directory: $script:PackageRoot"
+        Write-Log "DRY-RUN: would copy INF to staged package: $InfPath -> $script:StagedInfPath"
+        Write-Log "DRY-RUN: would copy SYS to staged package: $SysPath -> $script:StagedSysPath"
+        return
+    }
+
+    if (Test-Path -LiteralPath $script:PackageRoot) {
+        Remove-Item -LiteralPath $script:PackageRoot -Recurse -Force -ErrorAction Stop
+    }
+    New-Item -ItemType Directory -Force -Path $script:PackageRoot | Out-Null
+    Copy-Item -LiteralPath $InfPath -Destination $script:StagedInfPath -Force -ErrorAction Stop
+    Copy-Item -LiteralPath $SysPath -Destination $script:StagedSysPath -Force -ErrorAction Stop
+
+    if (-not (Test-Path -LiteralPath $script:StagedInfPath)) { throw "Staged INF missing after copy: $script:StagedInfPath" }
+    if (-not (Test-Path -LiteralPath $script:StagedSysPath)) { throw "Staged SYS missing after copy: $script:StagedSysPath" }
+}
+
 Write-Log 'Windows VHID Stack dev/test install helper starting.'
 Write-Log 'WARNING: This script is for reviewed isolated dev/test VM use. It is not a production installer.'
 Write-Log "Mode=$(@{ $true='DRY-RUN'; $false='APPLY' }[$DryRun]) Log=$script:LogPath"
@@ -161,7 +252,6 @@ if (-not (Test-Path -LiteralPath $SysPath)) {
     if ($Apply) { throw "Built SYS not found: $SysPath" }
     Write-Log "DRY-RUN WARNING: built SYS not found: $SysPath"
 }
-if ($SkipCatalog -and -not (Test-Path -LiteralPath $CatPath)) { Write-Log "Catalog is absent and -SkipCatalog was supplied: $CatPath" }
 
 $inf2cat = Find-Tool -Name 'inf2cat.exe'
 $signtool = Find-Tool -Name 'signtool.exe'
@@ -192,32 +282,34 @@ if ($Apply -and -not $SkipSigning -and $certs.Count -eq 0) {
     throw "No matching test certificate was found for subject '$CertificateSubject'."
 }
 
+Initialize-PackageStage
+
 Write-Log 'Current matching devices/packages before action:'
 Invoke-LoggedCommand -FilePath 'pnputil.exe' -Arguments @('/enum-devices', '/instanceid', $DeviceInstanceId) -AllowNonZeroExit | Out-Null
 Invoke-LoggedCommand -FilePath 'pnputil.exe' -Arguments @('/enum-drivers') -AllowNonZeroExit | Out-Null
 
 if (-not $SkipCatalog) {
     if ($inf2cat) {
-        Invoke-LoggedCommand -FilePath $inf2cat -Arguments @("/driver:$DriverRoot", "/os:$Inf2CatOs") -MutatesSystem | Out-Null
+        Invoke-LoggedCommand -FilePath $inf2cat -Arguments @("/driver:$PackageRoot", "/os:$Inf2CatOs") -MutatesSystem | Out-Null
     } else {
-        Write-Log "DRY-RUN: would run inf2cat for DriverRoot=$DriverRoot OS=$Inf2CatOs"
+        Write-Log "DRY-RUN: would run inf2cat for PackageRoot=$PackageRoot OS=$Inf2CatOs"
     }
 }
 
 if (-not $SkipSigning) {
     if ($signtool) {
-        Invoke-LoggedCommand -FilePath $signtool -Arguments @('sign', '/fd', 'SHA256', '/n', $CertificateSubject, $SysPath) -MutatesSystem | Out-Null
-        Invoke-LoggedCommand -FilePath $signtool -Arguments @('sign', '/fd', 'SHA256', '/n', $CertificateSubject, $CatPath) -MutatesSystem | Out-Null
+        Invoke-LoggedCommand -FilePath $signtool -Arguments @('sign', '/fd', 'SHA256', '/n', $CertificateSubject, $StagedSysPath) -MutatesSystem | Out-Null
+        Invoke-LoggedCommand -FilePath $signtool -Arguments @('sign', '/fd', 'SHA256', '/n', $CertificateSubject, $StagedCatPath) -MutatesSystem | Out-Null
     } else {
-        Write-Log "DRY-RUN: would sign SYS and CAT with certificate subject '$CertificateSubject'"
+        Write-Log "DRY-RUN: would sign staged SYS and CAT with certificate subject '$CertificateSubject'"
     }
 }
 
 if (-not $SkipInstall) {
     if ($pnputil) {
-        Invoke-LoggedCommand -FilePath $pnputil -Arguments @('/add-driver', $InfPath, '/install') -MutatesSystem | Out-Null
+        Invoke-LoggedCommand -FilePath $pnputil -Arguments @('/add-driver', $StagedInfPath, '/install') -MutatesSystem | Out-Null
     } else {
-        Write-Log "DRY-RUN: would install/update package from INF=$InfPath"
+        Write-Log "DRY-RUN: would install/update package from staged INF=$StagedInfPath"
     }
 }
 

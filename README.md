@@ -39,4 +39,4 @@ The driver skeleton intentionally has only a narrow fixed trigger and report pat
 
 Before any approved VM execution, use a known keyboard layout, keep Caps Lock off, disable IME/composition, focus a blank disposable text field, submit press/release without observation delay while the key is down, and fail the test on uppercase, wrong, composed, repeated, or multiple characters.
 
-Future work must add separate command-send vs observed-effect logging and explicit VM-only approval before any broader write-capable proof.
+Status receipts report driver-side accept/reject, submit, release/neutral, and health evidence only; they do not claim application-level observed-effect success. Future work must keep command-send evidence separate from observed-effect validation and requires explicit VM-only approval before any broader write-capable proof.

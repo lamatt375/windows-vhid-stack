@@ -1,7 +1,7 @@
 #pragma once
 
 #define VHID_PROTOCOL_VERSION_MAJOR 0u
-#define VHID_PROTOCOL_VERSION_MINOR 5u
+#define VHID_PROTOCOL_VERSION_MINOR 7u
 #define VHID_PROJECT_NAME "windows-vhid-stack"
 
 /*
@@ -53,6 +53,16 @@ DEFINE_GUID(
 #define VHID_COMMAND_MOVE_ABSOLUTE 2u
 #define VHID_COMMAND_CLICK_ABSOLUTE 3u
 #define VHID_COMMAND_KEY_TAP 4u
+
+#define VHID_COMMAND_CAPABILITY_SMOKE_SEQUENCE 0x00000001u
+#define VHID_COMMAND_CAPABILITY_MOVE_ABSOLUTE 0x00000002u
+#define VHID_COMMAND_CAPABILITY_CLICK_ABSOLUTE 0x00000004u
+#define VHID_COMMAND_CAPABILITY_KEY_TAP 0x00000008u
+#define VHID_COMMAND_CAPABILITY_MASK ( \
+    VHID_COMMAND_CAPABILITY_SMOKE_SEQUENCE | \
+    VHID_COMMAND_CAPABILITY_MOVE_ABSOLUTE | \
+    VHID_COMMAND_CAPABILITY_CLICK_ABSOLUTE | \
+    VHID_COMMAND_CAPABILITY_KEY_TAP)
 
 #define VHID_MOVE_ABSOLUTE_COORDINATE_MIN 0u
 #define VHID_MOVE_ABSOLUTE_COORDINATE_MAX 32767u
@@ -125,4 +135,16 @@ typedef struct _VHID_STATUS_REPORT {
     ULONG LastCommandType;
     ULONG LastCommandSequenceId;
     LONG LastCommandStatus;
+    ULONG SupportedCommandMask;
+    ULONG CurrentReceiptId;
+    ULONG LastReceiptId;
+    LONG LastCommandAcceptStatus;
+    LONG LastCommandReleaseStatus;
+    LONG LastCommandReleaseRetryStatus;
+    ULONG LastCommandReleaseRetryAttempted;
+    ULONG LastCommandReleaseRetrySucceeded;
+    ULONG LastCommandFinalNeutralKnown;
+    ULONG LastRejectedCommandType;
+    ULONG LastRejectedCommandSequenceId;
+    LONG LastRejectedCommandStatus;
 } VHID_STATUS_REPORT, *PVHID_STATUS_REPORT;

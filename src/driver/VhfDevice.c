@@ -261,6 +261,7 @@ VhidVhfDisableReportSequence(
     Context->ReportSubmissionEnabled = FALSE;
     Context->CurrentCommandType = VHID_COMMAND_NONE;
     Context->CurrentCommandSequenceId = 0;
+    Context->CurrentReceiptId = 0;
     InterlockedExchange(&Context->ReportSequenceState, (LONG)State);
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 }
@@ -274,6 +275,93 @@ VhidVhfIdleState(
     return Context->SmokeSequenceCompleted ?
         VhidReportSequenceComplete :
         VhidReportSequenceDisabled;
+}
+static
+ULONG
+VhidVhfAllocateReceiptId(
+    _Inout_ PVHID_VHF_CONTEXT Context
+    )
+{
+    ULONG receiptId;
+
+    receiptId = Context->NextReceiptId;
+    if (receiptId == 0) {
+        receiptId = 1;
+    }
+
+    Context->NextReceiptId = receiptId + 1;
+    if (Context->NextReceiptId == 0) {
+        Context->NextReceiptId = 1;
+    }
+
+    return receiptId;
+}
+
+static
+VOID
+VhidVhfResetReleaseReceipt(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ BOOLEAN FinalNeutralKnown
+    )
+{
+    Context->LastCommandReleaseStatus = STATUS_SUCCESS;
+    Context->LastCommandReleaseRetryStatus = STATUS_SUCCESS;
+    Context->LastCommandReleaseRetryAttempted = FALSE;
+    Context->LastCommandReleaseRetrySucceeded = FALSE;
+    Context->LastCommandFinalNeutralKnown = FinalNeutralKnown;
+}
+
+static
+VOID
+VhidVhfSetReleaseReceipt(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ NTSTATUS ReleaseStatus,
+    _In_ BOOLEAN RetryAttempted,
+    _In_ NTSTATUS RetryStatus,
+    _In_ BOOLEAN RetrySucceeded,
+    _In_ BOOLEAN FinalNeutralKnown
+    )
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+    Context->LastCommandReleaseStatus = ReleaseStatus;
+    Context->LastCommandReleaseRetryAttempted = RetryAttempted;
+    Context->LastCommandReleaseRetryStatus = RetryStatus;
+    Context->LastCommandReleaseRetrySucceeded = RetrySucceeded;
+    Context->LastCommandFinalNeutralKnown = FinalNeutralKnown;
+    KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+}
+static
+VOID
+VhidVhfStoreCurrentReceiptLocked(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ NTSTATUS Status
+    )
+{
+    if (Context->CurrentReceiptId == 0) {
+        return;
+    }
+
+    Context->LastCommandType = Context->CurrentCommandType;
+    Context->LastCommandSequenceId = Context->CurrentCommandSequenceId;
+    Context->LastReceiptId = Context->CurrentReceiptId;
+    Context->LastCommandStatus = Status;
+    Context->LastCommandAcceptStatus = STATUS_SUCCESS;
+}
+
+static
+VOID
+VhidVhfRecordRejectedCommandLocked(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ ULONG CommandType,
+    _In_ ULONG SequenceId,
+    _In_ NTSTATUS Status
+    )
+{
+    Context->LastRejectedCommandType = CommandType;
+    Context->LastRejectedCommandSequenceId = SequenceId;
+    Context->LastRejectedCommandStatus = Status;
 }
 
 static
@@ -344,20 +432,30 @@ VhidVhfCompleteSubmit(
     }
 
     if (!NT_SUCCESS(Status)) {
+        VhidVhfStoreCurrentReceiptLocked(Context, Status);
         Context->ReportSubmissionEnabled = FALSE;
         Context->CurrentCommandType = VHID_COMMAND_NONE;
         Context->CurrentCommandSequenceId = 0;
+        Context->CurrentReceiptId = 0;
+        Context->LastCommandReleaseStatus = Status;
+        Context->LastCommandFinalNeutralKnown = FALSE;
         InterlockedExchange(
             &Context->ReportSequenceState,
             (LONG)VhidReportSequenceFailed);
     } else if (!Context->Deleting) {
         if (DisableOnSuccess) {
+            VhidVhfStoreCurrentReceiptLocked(Context, Status);
             Context->ReportSubmissionEnabled = FALSE;
             if (SuccessState == VhidReportSequenceComplete) {
                 Context->SmokeSequenceCompleted = TRUE;
             }
             Context->CurrentCommandType = VHID_COMMAND_NONE;
             Context->CurrentCommandSequenceId = 0;
+            Context->CurrentReceiptId = 0;
+            if (SuccessState == VhidReportSequenceComplete) {
+                Context->LastCommandReleaseStatus = STATUS_SUCCESS;
+                Context->LastCommandFinalNeutralKnown = TRUE;
+            }
         }
 
         InterlockedExchange(
@@ -388,10 +486,14 @@ VhidVhfCompleteDirectCommand(
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
 
     Context->LastReportSubmitStatus = Status;
-    Context->LastCommandStatus = Status;
+    VhidVhfStoreCurrentReceiptLocked(Context, Status);
+    if (Context->CurrentReceiptId == 0) {
+        Context->LastCommandStatus = Status;
+    }
     Context->ReportSubmissionEnabled = FALSE;
     Context->CurrentCommandType = VHID_COMMAND_NONE;
     Context->CurrentCommandSequenceId = 0;
+    Context->CurrentReceiptId = 0;
 
     InterlockedExchange(
         &Context->ReportSequenceState,
@@ -547,6 +649,12 @@ VhidVhfContextInit(
     Context->LastReportSubmitStatus = STATUS_SUCCESS;
     Context->LastTriggerStatus = STATUS_SUCCESS;
     Context->LastCommandStatus = STATUS_SUCCESS;
+    Context->LastCommandAcceptStatus = STATUS_SUCCESS;
+    Context->LastCommandReleaseStatus = STATUS_SUCCESS;
+    Context->LastCommandReleaseRetryStatus = STATUS_SUCCESS;
+    Context->LastCommandFinalNeutralKnown = TRUE;
+    Context->LastRejectedCommandStatus = STATUS_SUCCESS;
+    Context->NextReceiptId = 1;
 }
 
 NTSTATUS
@@ -841,6 +949,14 @@ VhidVhfTriggerSmokeSequence(
         Context->LastCommandType = VHID_COMMAND_SMOKE_SEQUENCE;
         Context->LastCommandSequenceId = 0;
         Context->LastCommandStatus = STATUS_PENDING;
+        Context->LastCommandAcceptStatus = STATUS_SUCCESS;
+        Context->CurrentReceiptId = VhidVhfAllocateReceiptId(Context);
+        Context->LastReceiptId = Context->CurrentReceiptId;
+        Context->LastCommandReleaseStatus = STATUS_PENDING;
+        Context->LastCommandReleaseRetryStatus = STATUS_SUCCESS;
+        Context->LastCommandReleaseRetryAttempted = FALSE;
+        Context->LastCommandReleaseRetrySucceeded = FALSE;
+        Context->LastCommandFinalNeutralKnown = FALSE;
         Context->CurrentCommandType = VHID_COMMAND_SMOKE_SEQUENCE;
         Context->CurrentCommandSequenceId = 0;
         Context->ReportSubmissionEnabled = TRUE;
@@ -859,6 +975,13 @@ VhidVhfTriggerSmokeSequence(
     }
 
     Context->LastTriggerStatus = status;
+    if (!submitKickstart) {
+        VhidVhfRecordRejectedCommandLocked(
+            Context,
+            VHID_COMMAND_SMOKE_SEQUENCE,
+            0,
+            status);
+    }
 
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 
@@ -950,9 +1073,11 @@ VhidVhfMoveAbsolute(
     status = VhidValidateMoveAbsoluteRequest(Request);
     if (!NT_SUCCESS(status)) {
         KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
-        Context->LastCommandType = (Request != NULL) ? Request->CommandType : VHID_COMMAND_MOVE_ABSOLUTE;
-        Context->LastCommandSequenceId = (Request != NULL) ? Request->SequenceId : 0;
-        Context->LastCommandStatus = status;
+        VhidVhfRecordRejectedCommandLocked(
+            Context,
+            (Request != NULL) ? Request->CommandType : VHID_COMMAND_MOVE_ABSOLUTE,
+            (Request != NULL) ? Request->SequenceId : 0,
+            status);
         KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
         VHID_LOG_ERROR(
             "MoveAbsolute rejected, invalid request status=0x%08X",
@@ -986,6 +1111,10 @@ VhidVhfMoveAbsolute(
         Context->LastCommandType = VHID_COMMAND_MOVE_ABSOLUTE;
         Context->LastCommandSequenceId = Request->SequenceId;
         Context->LastCommandStatus = STATUS_PENDING;
+        Context->LastCommandAcceptStatus = STATUS_SUCCESS;
+        Context->CurrentReceiptId = VhidVhfAllocateReceiptId(Context);
+        Context->LastReceiptId = Context->CurrentReceiptId;
+        VhidVhfResetReleaseReceipt(Context, TRUE);
         Context->CurrentCommandType = VHID_COMMAND_MOVE_ABSOLUTE;
         Context->CurrentCommandSequenceId = Request->SequenceId;
         Context->ReportSubmissionEnabled = TRUE;
@@ -1001,9 +1130,11 @@ VhidVhfMoveAbsolute(
     }
 
     if (!submitReport) {
-        Context->LastCommandType = VHID_COMMAND_MOVE_ABSOLUTE;
-        Context->LastCommandSequenceId = Request->SequenceId;
-        Context->LastCommandStatus = status;
+        VhidVhfRecordRejectedCommandLocked(
+            Context,
+            VHID_COMMAND_MOVE_ABSOLUTE,
+            Request->SequenceId,
+            status);
     }
 
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
@@ -1094,6 +1225,8 @@ VhidVhfClickAbsolute(
     NTSTATUS retryStatus;
     VHFHANDLE vhfHandle;
     BOOLEAN submitReports;
+    BOOLEAN releaseRetryAttempted;
+    BOOLEAN releaseRetrySucceeded;
 
     if (Context == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -1102,9 +1235,11 @@ VhidVhfClickAbsolute(
     status = VhidValidateClickAbsoluteRequest(Request);
     if (!NT_SUCCESS(status)) {
         KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
-        Context->LastCommandType = (Request != NULL) ? Request->CommandType : VHID_COMMAND_CLICK_ABSOLUTE;
-        Context->LastCommandSequenceId = (Request != NULL) ? Request->SequenceId : 0;
-        Context->LastCommandStatus = status;
+        VhidVhfRecordRejectedCommandLocked(
+            Context,
+            (Request != NULL) ? Request->CommandType : VHID_COMMAND_CLICK_ABSOLUTE,
+            (Request != NULL) ? Request->SequenceId : 0,
+            status);
         KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
         VHID_LOG_ERROR(
             "ClickAbsolute rejected, invalid request status=0x%08X",
@@ -1114,6 +1249,9 @@ VhidVhfClickAbsolute(
 
     vhfHandle = NULL;
     submitReports = FALSE;
+    retryStatus = STATUS_SUCCESS;
+    releaseRetryAttempted = FALSE;
+    releaseRetrySucceeded = FALSE;
 
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
 
@@ -1148,6 +1286,14 @@ VhidVhfClickAbsolute(
         Context->LastCommandType = VHID_COMMAND_CLICK_ABSOLUTE;
         Context->LastCommandSequenceId = Request->SequenceId;
         Context->LastCommandStatus = STATUS_PENDING;
+        Context->LastCommandAcceptStatus = STATUS_SUCCESS;
+        Context->CurrentReceiptId = VhidVhfAllocateReceiptId(Context);
+        Context->LastReceiptId = Context->CurrentReceiptId;
+        Context->LastCommandReleaseStatus = STATUS_PENDING;
+        Context->LastCommandReleaseRetryStatus = STATUS_SUCCESS;
+        Context->LastCommandReleaseRetryAttempted = FALSE;
+        Context->LastCommandReleaseRetrySucceeded = FALSE;
+        Context->LastCommandFinalNeutralKnown = FALSE;
         Context->CurrentCommandType = VHID_COMMAND_CLICK_ABSOLUTE;
         Context->CurrentCommandSequenceId = Request->SequenceId;
         Context->ReportSubmissionEnabled = TRUE;
@@ -1163,9 +1309,11 @@ VhidVhfClickAbsolute(
     }
 
     if (!submitReports) {
-        Context->LastCommandType = VHID_COMMAND_CLICK_ABSOLUTE;
-        Context->LastCommandSequenceId = Request->SequenceId;
-        Context->LastCommandStatus = status;
+        VhidVhfRecordRejectedCommandLocked(
+            Context,
+            VHID_COMMAND_CLICK_ABSOLUTE,
+            Request->SequenceId,
+            status);
     }
 
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
@@ -1191,6 +1339,13 @@ VhidVhfClickAbsolute(
         Context->AbsoluteMoveReport,
         sizeof(Context->AbsoluteMoveReport));
     if (!NT_SUCCESS(status)) {
+        VhidVhfSetReleaseReceipt(
+            Context,
+            STATUS_SUCCESS,
+            FALSE,
+            STATUS_SUCCESS,
+            FALSE,
+            TRUE);
         VhidVhfCompleteDirectCommand(Context, status);
         VHID_LOG_ERROR(
             "ClickAbsolute move submit failed, x=%lu y=%lu status=0x%08X",
@@ -1216,6 +1371,13 @@ VhidVhfClickAbsolute(
         Context->AbsoluteClickDownReport,
         sizeof(Context->AbsoluteClickDownReport));
     if (!NT_SUCCESS(status)) {
+        VhidVhfSetReleaseReceipt(
+            Context,
+            STATUS_SUCCESS,
+            FALSE,
+            STATUS_SUCCESS,
+            FALSE,
+            TRUE);
         VhidVhfCompleteDirectCommand(Context, status);
         VHID_LOG_ERROR(
             "ClickAbsolute left-button down submit failed, x=%lu y=%lu status=0x%08X",
@@ -1242,6 +1404,7 @@ VhidVhfClickAbsolute(
         sizeof(Context->AbsoluteClickUpReport));
 
     if (!NT_SUCCESS(status)) {
+        releaseRetryAttempted = TRUE;
         VHID_LOG_ERROR(
             "ClickAbsolute left-button up submit failed, attempting emergency neutral retry, x=%lu y=%lu status=0x%08X",
             Request->X,
@@ -1260,6 +1423,7 @@ VhidVhfClickAbsolute(
                 Request->Y,
                 VHID_ABSOLUTE_MOUSE_REPORT_ID,
                 Request->SequenceId);
+            releaseRetrySucceeded = TRUE;
             status = STATUS_SUCCESS;
         } else {
             VHID_LOG_ERROR(
@@ -1270,6 +1434,14 @@ VhidVhfClickAbsolute(
             status = retryStatus;
         }
     }
+
+    VhidVhfSetReleaseReceipt(
+        Context,
+        status,
+        releaseRetryAttempted,
+        retryStatus,
+        releaseRetrySucceeded,
+        NT_SUCCESS(status));
 
     VhidVhfCompleteDirectCommand(Context, status);
 
@@ -1332,6 +1504,8 @@ VhidVhfKeyTap(
     NTSTATUS retryStatus;
     VHFHANDLE vhfHandle;
     BOOLEAN submitReports;
+    BOOLEAN releaseRetryAttempted;
+    BOOLEAN releaseRetrySucceeded;
     UCHAR modifier;
     UCHAR usage;
 
@@ -1344,9 +1518,11 @@ VhidVhfKeyTap(
     status = VhidValidateKeyTapRequest(Request, &modifier, &usage);
     if (!NT_SUCCESS(status)) {
         KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
-        Context->LastCommandType = (Request != NULL) ? Request->CommandType : VHID_COMMAND_KEY_TAP;
-        Context->LastCommandSequenceId = (Request != NULL) ? Request->SequenceId : 0;
-        Context->LastCommandStatus = status;
+        VhidVhfRecordRejectedCommandLocked(
+            Context,
+            (Request != NULL) ? Request->CommandType : VHID_COMMAND_KEY_TAP,
+            (Request != NULL) ? Request->SequenceId : 0,
+            status);
         KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
         VHID_LOG_ERROR(
             "KeyTap rejected, invalid request status=0x%08X",
@@ -1356,6 +1532,9 @@ VhidVhfKeyTap(
 
     vhfHandle = NULL;
     submitReports = FALSE;
+    retryStatus = STATUS_SUCCESS;
+    releaseRetryAttempted = FALSE;
+    releaseRetrySucceeded = FALSE;
 
     KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
 
@@ -1379,6 +1558,14 @@ VhidVhfKeyTap(
         Context->LastCommandType = VHID_COMMAND_KEY_TAP;
         Context->LastCommandSequenceId = Request->SequenceId;
         Context->LastCommandStatus = STATUS_PENDING;
+        Context->LastCommandAcceptStatus = STATUS_SUCCESS;
+        Context->CurrentReceiptId = VhidVhfAllocateReceiptId(Context);
+        Context->LastReceiptId = Context->CurrentReceiptId;
+        Context->LastCommandReleaseStatus = STATUS_PENDING;
+        Context->LastCommandReleaseRetryStatus = STATUS_SUCCESS;
+        Context->LastCommandReleaseRetryAttempted = FALSE;
+        Context->LastCommandReleaseRetrySucceeded = FALSE;
+        Context->LastCommandFinalNeutralKnown = FALSE;
         Context->CurrentCommandType = VHID_COMMAND_KEY_TAP;
         Context->CurrentCommandSequenceId = Request->SequenceId;
         Context->ReportSubmissionEnabled = TRUE;
@@ -1394,9 +1581,11 @@ VhidVhfKeyTap(
     }
 
     if (!submitReports) {
-        Context->LastCommandType = VHID_COMMAND_KEY_TAP;
-        Context->LastCommandSequenceId = Request->SequenceId;
-        Context->LastCommandStatus = status;
+        VhidVhfRecordRejectedCommandLocked(
+            Context,
+            VHID_COMMAND_KEY_TAP,
+            Request->SequenceId,
+            status);
     }
 
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
@@ -1421,6 +1610,13 @@ VhidVhfKeyTap(
         Context->KeyboardKeyDownReport,
         sizeof(Context->KeyboardKeyDownReport));
     if (!NT_SUCCESS(status)) {
+        VhidVhfSetReleaseReceipt(
+            Context,
+            STATUS_SUCCESS,
+            FALSE,
+            STATUS_SUCCESS,
+            FALSE,
+            TRUE);
         VhidVhfCompleteDirectCommand(Context, status);
         VHID_LOG_ERROR(
             "KeyTap key-down submit failed, keyCode=0x%08X status=0x%08X",
@@ -1444,6 +1640,7 @@ VhidVhfKeyTap(
         sizeof(VhidNeutralKeyboardReport));
 
     if (!NT_SUCCESS(status)) {
+        releaseRetryAttempted = TRUE;
         VHID_LOG_ERROR(
             "KeyTap neutral key-up submit failed, attempting emergency neutral retry, keyCode=0x%08X status=0x%08X",
             Request->KeyCode,
@@ -1459,6 +1656,7 @@ VhidVhfKeyTap(
                 "KeyTap emergency neutral retry completed, keyCode=0x%08X sequenceId=%lu",
                 Request->KeyCode,
                 Request->SequenceId);
+            releaseRetrySucceeded = TRUE;
             status = STATUS_SUCCESS;
         } else {
             VHID_LOG_ERROR(
@@ -1468,6 +1666,14 @@ VhidVhfKeyTap(
             status = retryStatus;
         }
     }
+
+    VhidVhfSetReleaseReceipt(
+        Context,
+        status,
+        releaseRetryAttempted,
+        retryStatus,
+        releaseRetrySucceeded,
+        NT_SUCCESS(status));
 
     VhidVhfCompleteDirectCommand(Context, status);
 
@@ -1553,6 +1759,18 @@ VhidVhfQueryStatus(
     statusReport->LastCommandType = Context->LastCommandType;
     statusReport->LastCommandSequenceId = Context->LastCommandSequenceId;
     statusReport->LastCommandStatus = Context->LastCommandStatus;
+    statusReport->SupportedCommandMask = VHID_COMMAND_CAPABILITY_MASK;
+    statusReport->CurrentReceiptId = Context->CurrentReceiptId;
+    statusReport->LastReceiptId = Context->LastReceiptId;
+    statusReport->LastCommandAcceptStatus = Context->LastCommandAcceptStatus;
+    statusReport->LastCommandReleaseStatus = Context->LastCommandReleaseStatus;
+    statusReport->LastCommandReleaseRetryStatus = Context->LastCommandReleaseRetryStatus;
+    statusReport->LastCommandReleaseRetryAttempted = Context->LastCommandReleaseRetryAttempted ? 1u : 0u;
+    statusReport->LastCommandReleaseRetrySucceeded = Context->LastCommandReleaseRetrySucceeded ? 1u : 0u;
+    statusReport->LastCommandFinalNeutralKnown = Context->LastCommandFinalNeutralKnown ? 1u : 0u;
+    statusReport->LastRejectedCommandType = Context->LastRejectedCommandType;
+    statusReport->LastRejectedCommandSequenceId = Context->LastRejectedCommandSequenceId;
+    statusReport->LastRejectedCommandStatus = Context->LastRejectedCommandStatus;
 
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 
@@ -1601,6 +1819,7 @@ VhidVhfCleanup(
     Context->ReadyForNextReport = FALSE;
     Context->CurrentCommandType = VHID_COMMAND_NONE;
     Context->CurrentCommandSequenceId = 0;
+    Context->CurrentReceiptId = 0;
     InterlockedExchange(
         &Context->ReportSequenceState,
         (LONG)VhidReportSequenceDisabled);
@@ -1624,6 +1843,7 @@ VhidVhfCleanup(
     Context->ReadyForNextReport = FALSE;
     Context->CurrentCommandType = VHID_COMMAND_NONE;
     Context->CurrentCommandSequenceId = 0;
+    Context->CurrentReceiptId = 0;
     InterlockedExchange(
         &Context->ReportSequenceState,
         (LONG)VhidReportSequenceDisabled);

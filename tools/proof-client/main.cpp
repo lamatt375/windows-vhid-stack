@@ -436,6 +436,20 @@ static int RunStatus(HANDLE device)
                << L" (" << CommandTypeName(report.LastCommandType) << L")\n";
     std::wcout << L"lastCommandSequenceId=" << report.LastCommandSequenceId << L"\n";
     PrintStatusValue(L"lastCommandStatus", report.LastCommandStatus);
+    std::wcout << L"supportedCommandMask=0x" << std::hex << std::uppercase
+               << report.SupportedCommandMask << std::nouppercase << std::dec << L"\n";
+    std::wcout << L"currentReceiptId=" << report.CurrentReceiptId << L"\n";
+    std::wcout << L"lastReceiptId=" << report.LastReceiptId << L"\n";
+    PrintStatusValue(L"lastCommandAcceptStatus", report.LastCommandAcceptStatus);
+    PrintStatusValue(L"lastCommandReleaseStatus", report.LastCommandReleaseStatus);
+    PrintStatusValue(L"lastCommandReleaseRetryStatus", report.LastCommandReleaseRetryStatus);
+    PrintFlag(L"lastCommandReleaseRetryAttempted", report.LastCommandReleaseRetryAttempted);
+    PrintFlag(L"lastCommandReleaseRetrySucceeded", report.LastCommandReleaseRetrySucceeded);
+    PrintFlag(L"lastCommandFinalNeutralKnown", report.LastCommandFinalNeutralKnown);
+    std::wcout << L"lastRejectedCommandType=" << report.LastRejectedCommandType
+               << L" (" << CommandTypeName(report.LastRejectedCommandType) << L")\n";
+    std::wcout << L"lastRejectedCommandSequenceId=" << report.LastRejectedCommandSequenceId << L"\n";
+    PrintStatusValue(L"lastRejectedCommandStatus", report.LastRejectedCommandStatus);
     return 0;
 }
 

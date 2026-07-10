@@ -1,8 +1,7 @@
+#include <initguid.h>
+
 #include "Device.h"
 #include "Trace.h"
-
-#include <initguid.h>
-#include "../shared/VhidProtocol.h"
 
 static
 NTSTATUS

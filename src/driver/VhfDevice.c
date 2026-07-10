@@ -8,9 +8,10 @@
 #define VHID_KEYBOARD_REPORT_ID ((UCHAR)VHID_HID_REPORT_ID_KEYBOARD)
 #define VHID_MOUSE_REPORT_ID ((UCHAR)VHID_HID_REPORT_ID_RELATIVE_MOUSE)
 #define VHID_ABSOLUTE_MOUSE_REPORT_ID ((UCHAR)VHID_HID_REPORT_ID_ABSOLUTE_MOUSE)
-#define VHID_KEYBOARD_INPUT_REPORT_LENGTH 9u
+#define VHID_KEYBOARD_INPUT_REPORT_LENGTH VHID_HID_KEYBOARD_REPORT_LENGTH
 #define VHID_MOUSE_INPUT_REPORT_LENGTH 4u
 #define VHID_ABSOLUTE_MOUSE_INPUT_REPORT_LENGTH VHID_HID_ABSOLUTE_MOUSE_REPORT_LENGTH
+#define VHID_KEYBOARD_MODIFIER_LEFT_SHIFT 0x02u
 
 static UCHAR VhidNeutralKeyboardReport[VHID_KEYBOARD_INPUT_REPORT_LENGTH] = {
     VHID_KEYBOARD_REPORT_ID, 0x00, 0x00, 0x00, 0x00,
@@ -113,6 +114,136 @@ VhidBuildAbsoluteReport(
     Report[3] = (UCHAR)((X >> 8) & 0xFFu);
     Report[4] = (UCHAR)(Y & 0xFFu);
     Report[5] = (UCHAR)((Y >> 8) & 0xFFu);
+}
+static
+VOID
+VhidBuildKeyboardReport(
+    _Out_writes_bytes_(VHID_KEYBOARD_INPUT_REPORT_LENGTH) UCHAR* Report,
+    _In_ UCHAR Modifier,
+    _In_ UCHAR Usage
+    )
+{
+    RtlZeroMemory(Report, VHID_KEYBOARD_INPUT_REPORT_LENGTH);
+    Report[0] = VHID_KEYBOARD_REPORT_ID;
+    Report[1] = Modifier;
+    Report[3] = Usage;
+}
+
+static
+BOOLEAN
+VhidIsValidKeyTapUsage(
+    _In_ UCHAR Usage
+    )
+{
+    return (Usage >= 0x04 && Usage <= 0x27) ||
+           (Usage >= 0x28 && Usage <= 0x38);
+}
+
+static
+BOOLEAN
+VhidIsValidKeyboardTapReport(
+    _In_reads_bytes_(ReportLength) PUCHAR Report,
+    _In_ ULONG ReportLength
+    )
+{
+    ULONG index;
+
+    if (Report == NULL || ReportLength != VHID_KEYBOARD_INPUT_REPORT_LENGTH) {
+        return FALSE;
+    }
+
+    if (Report[0] != VHID_KEYBOARD_REPORT_ID ||
+        (Report[1] != 0x00 && Report[1] != VHID_KEYBOARD_MODIFIER_LEFT_SHIFT) ||
+        Report[2] != 0x00) {
+        return FALSE;
+    }
+
+    for (index = 4; index < VHID_KEYBOARD_INPUT_REPORT_LENGTH; index++) {
+        if (Report[index] != 0x00) {
+            return FALSE;
+        }
+    }
+
+    if (Report[3] == 0x00) {
+        return Report[1] == 0x00;
+    }
+
+    return VhidIsValidKeyTapUsage(Report[3]);
+}
+
+static
+NTSTATUS
+VhidMapKeyTapKeyCode(
+    _In_ ULONG KeyCode,
+    _Out_ UCHAR* Modifier,
+    _Out_ UCHAR* Usage
+    )
+{
+    if (Modifier == NULL || Usage == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *Modifier = 0x00;
+    *Usage = 0x00;
+
+    if (KeyCode >= 'a' && KeyCode <= 'z') {
+        *Usage = (UCHAR)(0x04u + (KeyCode - 'a'));
+        return STATUS_SUCCESS;
+    }
+
+    if (KeyCode >= 'A' && KeyCode <= 'Z') {
+        *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT;
+        *Usage = (UCHAR)(0x04u + (KeyCode - 'A'));
+        return STATUS_SUCCESS;
+    }
+
+    if (KeyCode >= '1' && KeyCode <= '9') {
+        *Usage = (UCHAR)(0x1Eu + (KeyCode - '1'));
+        return STATUS_SUCCESS;
+    }
+
+    switch (KeyCode) {
+    case '0': *Usage = 0x27; return STATUS_SUCCESS;
+    case '!': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x1E; return STATUS_SUCCESS;
+    case '@': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x1F; return STATUS_SUCCESS;
+    case '#': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x20; return STATUS_SUCCESS;
+    case '$': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x21; return STATUS_SUCCESS;
+    case '%': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x22; return STATUS_SUCCESS;
+    case '^': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x23; return STATUS_SUCCESS;
+    case '&': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x24; return STATUS_SUCCESS;
+    case '*': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x25; return STATUS_SUCCESS;
+    case '(': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x26; return STATUS_SUCCESS;
+    case ')': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x27; return STATUS_SUCCESS;
+    case ' ': *Usage = 0x2C; return STATUS_SUCCESS;
+    case '-': *Usage = 0x2D; return STATUS_SUCCESS;
+    case '_': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x2D; return STATUS_SUCCESS;
+    case '=': *Usage = 0x2E; return STATUS_SUCCESS;
+    case '+': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x2E; return STATUS_SUCCESS;
+    case '[': *Usage = 0x2F; return STATUS_SUCCESS;
+    case '{': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x2F; return STATUS_SUCCESS;
+    case ']': *Usage = 0x30; return STATUS_SUCCESS;
+    case '}': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x30; return STATUS_SUCCESS;
+    case '\\': *Usage = 0x31; return STATUS_SUCCESS;
+    case '|': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x31; return STATUS_SUCCESS;
+    case ';': *Usage = 0x33; return STATUS_SUCCESS;
+    case ':': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x33; return STATUS_SUCCESS;
+    case '\'': *Usage = 0x34; return STATUS_SUCCESS;
+    case '"': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x34; return STATUS_SUCCESS;
+    case '`': *Usage = 0x35; return STATUS_SUCCESS;
+    case '~': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x35; return STATUS_SUCCESS;
+    case ',': *Usage = 0x36; return STATUS_SUCCESS;
+    case '<': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x36; return STATUS_SUCCESS;
+    case '.': *Usage = 0x37; return STATUS_SUCCESS;
+    case '>': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x37; return STATUS_SUCCESS;
+    case '/': *Usage = 0x38; return STATUS_SUCCESS;
+    case '?': *Modifier = VHID_KEYBOARD_MODIFIER_LEFT_SHIFT; *Usage = 0x38; return STATUS_SUCCESS;
+    case VHID_KEY_TAP_KEY_ENTER: *Usage = 0x28; return STATUS_SUCCESS;
+    case VHID_KEY_TAP_KEY_ESCAPE: *Usage = 0x29; return STATUS_SUCCESS;
+    case VHID_KEY_TAP_KEY_BACKSPACE: *Usage = 0x2A; return STATUS_SUCCESS;
+    case VHID_KEY_TAP_KEY_TAB: *Usage = 0x2B; return STATUS_SUCCESS;
+    default:
+        return STATUS_INVALID_PARAMETER;
+    }
 }
 
 static
@@ -371,6 +502,31 @@ VhidVhfSubmitAbsoluteReport(
     packet.reportBuffer = Report;
     packet.reportBufferLen = ReportLength;
     packet.reportId = VHID_ABSOLUTE_MOUSE_REPORT_ID;
+
+    return VhfReadReportSubmit(VhfHandle, &packet);
+}
+static
+NTSTATUS
+VhidVhfSubmitKeyboardTapReport(
+    _In_ VHFHANDLE VhfHandle,
+    _In_reads_bytes_(ReportLength) PUCHAR Report,
+    _In_ ULONG ReportLength
+    )
+{
+    HID_XFER_PACKET packet;
+
+    if (VhfHandle == NULL) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    if (!VhidIsValidKeyboardTapReport(Report, ReportLength)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&packet, sizeof(packet));
+    packet.reportBuffer = Report;
+    packet.reportBufferLen = ReportLength;
+    packet.reportId = VHID_KEYBOARD_REPORT_ID;
 
     return VhfReadReportSubmit(VhfHandle, &packet);
 }
@@ -1131,6 +1287,203 @@ VhidVhfClickAbsolute(
         Request->X,
         Request->Y,
         VHID_ABSOLUTE_MOUSE_REPORT_ID,
+        Request->SequenceId);
+
+    return STATUS_SUCCESS;
+}
+static
+NTSTATUS
+VhidValidateKeyTapRequest(
+    _In_ const VHID_KEY_TAP_REQUEST* Request,
+    _Out_ UCHAR* Modifier,
+    _Out_ UCHAR* Usage
+    )
+{
+    if (Request == NULL || Modifier == NULL || Usage == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Request->Size != sizeof(*Request) ||
+        Request->ProtocolVersionMajor != VHID_PROTOCOL_VERSION_MAJOR ||
+        Request->ProtocolVersionMinor != VHID_PROTOCOL_VERSION_MINOR ||
+        Request->CommandType != VHID_COMMAND_KEY_TAP) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Request->Reserved0 != 0 ||
+        Request->Reserved1 != 0 ||
+        Request->Reserved2 != 0 ||
+        Request->Reserved3 != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return VhidMapKeyTapKeyCode(Request->KeyCode, Modifier, Usage);
+}
+
+NTSTATUS
+VhidVhfKeyTap(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ const VHID_KEY_TAP_REQUEST* Request
+    )
+{
+    KIRQL oldIrql;
+    LONG state;
+    NTSTATUS status;
+    NTSTATUS retryStatus;
+    VHFHANDLE vhfHandle;
+    BOOLEAN submitReports;
+    UCHAR modifier;
+    UCHAR usage;
+
+    if (Context == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    modifier = 0x00;
+    usage = 0x00;
+    status = VhidValidateKeyTapRequest(Request, &modifier, &usage);
+    if (!NT_SUCCESS(status)) {
+        KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+        Context->LastCommandType = (Request != NULL) ? Request->CommandType : VHID_COMMAND_KEY_TAP;
+        Context->LastCommandSequenceId = (Request != NULL) ? Request->SequenceId : 0;
+        Context->LastCommandStatus = status;
+        KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+        VHID_LOG_ERROR(
+            "KeyTap rejected, invalid request status=0x%08X",
+            status);
+        return status;
+    }
+
+    vhfHandle = NULL;
+    submitReports = FALSE;
+
+    KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+
+    state = Context->ReportSequenceState;
+
+    if (Context->Deleting) {
+        status = STATUS_DELETE_PENDING;
+    } else if (!Context->VhfStarted || Context->VhfHandle == NULL) {
+        status = STATUS_DEVICE_NOT_READY;
+    } else if (Context->ReportSubmissionEnabled || Context->ActiveSubmissions > 0) {
+        status = STATUS_DEVICE_BUSY;
+    } else if (state != (LONG)VhidReportSequenceDisabled &&
+               state != (LONG)VhidReportSequenceComplete) {
+        status = STATUS_INVALID_DEVICE_STATE;
+    } else {
+        VhidBuildKeyboardReport(
+            Context->KeyboardKeyDownReport,
+            modifier,
+            usage);
+        Context->LastReportSubmitStatus = STATUS_SUCCESS;
+        Context->LastCommandType = VHID_COMMAND_KEY_TAP;
+        Context->LastCommandSequenceId = Request->SequenceId;
+        Context->LastCommandStatus = STATUS_PENDING;
+        Context->CurrentCommandType = VHID_COMMAND_KEY_TAP;
+        Context->CurrentCommandSequenceId = Request->SequenceId;
+        Context->ReportSubmissionEnabled = TRUE;
+        Context->ReadyForNextReport = FALSE;
+        InterlockedExchange(
+            &Context->ReportSequenceState,
+            (LONG)VhidReportKeyTapDownSubmitting);
+        Context->ActiveSubmissions++;
+        KeClearEvent(&Context->NoActiveSubmissionsEvent);
+        vhfHandle = Context->VhfHandle;
+        submitReports = TRUE;
+        status = STATUS_SUCCESS;
+    }
+
+    if (!submitReports) {
+        Context->LastCommandType = VHID_COMMAND_KEY_TAP;
+        Context->LastCommandSequenceId = Request->SequenceId;
+        Context->LastCommandStatus = status;
+    }
+
+    KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+
+    if (!submitReports) {
+        VHID_LOG_ERROR(
+            "KeyTap rejected, keyCode=0x%08X status=0x%08X",
+            Request->KeyCode,
+            status);
+        return status;
+    }
+
+    VHID_LOG_INFO(
+        "KeyTap key-down submit attempt, keyCode=0x%08X modifier=0x%02X usage=0x%02X sequenceId=%lu",
+        Request->KeyCode,
+        modifier,
+        usage,
+        Request->SequenceId);
+
+    status = VhidVhfSubmitKeyboardTapReport(
+        vhfHandle,
+        Context->KeyboardKeyDownReport,
+        sizeof(Context->KeyboardKeyDownReport));
+    if (!NT_SUCCESS(status)) {
+        VhidVhfCompleteDirectCommand(Context, status);
+        VHID_LOG_ERROR(
+            "KeyTap key-down submit failed, keyCode=0x%08X status=0x%08X",
+            Request->KeyCode,
+            status);
+        return status;
+    }
+
+    VhidVhfSetDirectCommandState(
+        Context,
+        VhidReportKeyTapUpSubmitting);
+
+    VHID_LOG_INFO(
+        "KeyTap neutral key-up submit attempt, keyCode=0x%08X sequenceId=%lu",
+        Request->KeyCode,
+        Request->SequenceId);
+
+    status = VhidVhfSubmitKeyboardTapReport(
+        vhfHandle,
+        VhidNeutralKeyboardReport,
+        sizeof(VhidNeutralKeyboardReport));
+
+    if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR(
+            "KeyTap neutral key-up submit failed, attempting emergency neutral retry, keyCode=0x%08X status=0x%08X",
+            Request->KeyCode,
+            status);
+
+        retryStatus = VhidVhfSubmitKeyboardTapReport(
+            vhfHandle,
+            VhidNeutralKeyboardReport,
+            sizeof(VhidNeutralKeyboardReport));
+
+        if (NT_SUCCESS(retryStatus)) {
+            VHID_LOG_INFO(
+                "KeyTap emergency neutral retry completed, keyCode=0x%08X sequenceId=%lu",
+                Request->KeyCode,
+                Request->SequenceId);
+            status = STATUS_SUCCESS;
+        } else {
+            VHID_LOG_ERROR(
+                "KeyTap emergency neutral retry failed, keyCode=0x%08X status=0x%08X",
+                Request->KeyCode,
+                retryStatus);
+            status = retryStatus;
+        }
+    }
+
+    VhidVhfCompleteDirectCommand(Context, status);
+
+    if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR(
+            "KeyTap neutral key-up submit failed after emergency neutral retry, keyCode=0x%08X status=0x%08X",
+            Request->KeyCode,
+            status);
+        return status;
+    }
+
+    VHID_LOG_INFO(
+        "KeyTap completed, keyCode=0x%08X modifier=0x%02X usage=0x%02X sequenceId=%lu",
+        Request->KeyCode,
+        modifier,
+        usage,
         Request->SequenceId);
 
     return STATUS_SUCCESS;

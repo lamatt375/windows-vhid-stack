@@ -123,6 +123,10 @@ static const wchar_t* SequenceStateName(LONG state)
         return L"ClickAbsoluteDownSubmitting";
     case 20:
         return L"ClickAbsoluteUpSubmitting";
+    case 21:
+        return L"KeyTapDownSubmitting";
+    case 22:
+        return L"KeyTapUpSubmitting";
     default:
         return L"Unknown";
     }
@@ -139,6 +143,8 @@ static const wchar_t* CommandTypeName(ULONG commandType)
         return L"MoveAbsolute";
     case VHID_COMMAND_CLICK_ABSOLUTE:
         return L"ClickAbsolute";
+    case VHID_COMMAND_KEY_TAP:
+        return L"KeyTap";
     default:
         return L"Unknown";
     }
@@ -178,6 +184,60 @@ static bool ParseCoordinate(const wchar_t* text, ULONG* value)
 
     *value = static_cast<ULONG>(parsed);
     return true;
+}
+static std::wstring LowerAscii(std::wstring value)
+{
+    for (size_t index = 0; index < value.size(); index++) {
+        if (value[index] >= L'A' && value[index] <= L'Z') {
+            value[index] = static_cast<wchar_t>(value[index] - L'A' + L'a');
+        }
+    }
+
+    return value;
+}
+
+static bool ParseKeyToken(const wchar_t* text, ULONG* keyCode)
+{
+    std::wstring token;
+    std::wstring lower;
+    wchar_t ch;
+
+    if (text == nullptr || keyCode == nullptr || *text == L'\0') {
+        return false;
+    }
+
+    token = text;
+    if (token.size() == 1) {
+        ch = token[0];
+        if (ch >= 0x20 && ch <= 0x7E) {
+            *keyCode = static_cast<ULONG>(ch);
+            return true;
+        }
+    }
+
+    lower = LowerAscii(token);
+    if (lower == L"space") {
+        *keyCode = static_cast<ULONG>(L' ');
+        return true;
+    }
+    if (lower == L"enter" || lower == L"return") {
+        *keyCode = VHID_KEY_TAP_KEY_ENTER;
+        return true;
+    }
+    if (lower == L"esc" || lower == L"escape") {
+        *keyCode = VHID_KEY_TAP_KEY_ESCAPE;
+        return true;
+    }
+    if (lower == L"tab") {
+        *keyCode = VHID_KEY_TAP_KEY_TAB;
+        return true;
+    }
+    if (lower == L"backspace" || lower == L"bksp") {
+        *keyCode = VHID_KEY_TAP_KEY_BACKSPACE;
+        return true;
+    }
+
+    return false;
 }
 
 static int RunTrigger(HANDLE device)
@@ -281,6 +341,44 @@ static int RunClickAbsolute(HANDLE device, ULONG x, ULONG y)
     std::wcout << L"click-abs accepted: DeviceIoControl succeeded\n";
     return 0;
 }
+
+static int RunKeyTap(HANDLE device, ULONG keyCode)
+{
+    VHID_KEY_TAP_REQUEST request;
+    BOOL ok;
+    DWORD bytesReturned;
+
+    ZeroMemory(&request, sizeof(request));
+    request.Size = sizeof(request);
+    request.ProtocolVersionMajor = VHID_PROTOCOL_VERSION_MAJOR;
+    request.ProtocolVersionMinor = VHID_PROTOCOL_VERSION_MINOR;
+    request.CommandType = VHID_COMMAND_KEY_TAP;
+    request.SequenceId = 3;
+    request.KeyCode = keyCode;
+
+    bytesReturned = 0;
+    std::wcout << L"sending keytap keyCode=0x" << std::hex << std::uppercase
+               << keyCode << std::nouppercase << std::dec << L"\n";
+    ok = DeviceIoControl(
+        device,
+        VHID_IOCTL_KEY_TAP,
+        &request,
+        sizeof(request),
+        nullptr,
+        0,
+        &bytesReturned,
+        nullptr);
+
+    if (!ok) {
+        DWORD error = GetLastError();
+        std::wcerr << L"keytap failed: DeviceIoControl failed, error=" << error << L"\n";
+        return 10;
+    }
+
+    std::wcout << L"keytap accepted: DeviceIoControl succeeded\n";
+    return 0;
+}
+
 static int RunStatus(HANDLE device)
 {
     VHID_STATUS_REPORT report;
@@ -343,7 +441,7 @@ static int RunStatus(HANDLE device)
 
 static void PrintUsage()
 {
-    std::wcerr << L"usage: proof-client.exe trigger|status|move-abs <x> <y>|click-abs <x> <y>\n";
+    std::wcerr << L"usage: proof-client.exe trigger|status|move-abs <x> <y>|click-abs <x> <y>|keytap <key>\n";
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -354,6 +452,7 @@ int wmain(int argc, wchar_t** argv)
     DWORD desiredAccess;
     ULONG x;
     ULONG y;
+    ULONG keyCode;
     int result;
 
     if (argc < 2) {
@@ -364,6 +463,7 @@ int wmain(int argc, wchar_t** argv)
     command = argv[1];
     x = 0;
     y = 0;
+    keyCode = 0;
 
     if (command == L"trigger" || command == L"status") {
         if (argc != 2) {
@@ -375,6 +475,12 @@ int wmain(int argc, wchar_t** argv)
             PrintUsage();
             std::wcerr << command << L" coordinates must be decimal values from 0 to "
                        << VHID_MOVE_ABSOLUTE_COORDINATE_MAX << L"\n";
+            return 2;
+        }
+    } else if (command == L"keytap") {
+        if (argc != 3 || !ParseKeyToken(argv[2], &keyCode)) {
+            PrintUsage();
+            std::wcerr << L"keytap supports one printable US ASCII key or one of: space, enter, esc, escape, tab, backspace, bksp\n";
             return 2;
         }
     } else {
@@ -409,6 +515,8 @@ int wmain(int argc, wchar_t** argv)
         result = RunMoveAbsolute(device, x, y);
     } else if (command == L"click-abs") {
         result = RunClickAbsolute(device, x, y);
+    } else if (command == L"keytap") {
+        result = RunKeyTap(device, keyCode);
     } else {
         result = RunTrigger(device);
     }

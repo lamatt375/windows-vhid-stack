@@ -1,7 +1,7 @@
 #pragma once
 
 #define VHID_PROTOCOL_VERSION_MAJOR 0u
-#define VHID_PROTOCOL_VERSION_MINOR 4u
+#define VHID_PROTOCOL_VERSION_MINOR 5u
 #define VHID_PROJECT_NAME "windows-vhid-stack"
 
 /*
@@ -19,6 +19,11 @@
  * normalized 0..32767 coordinates and performs one left click only. It does
  * not accept button selection, raw HID report bytes, text, repeats, batches,
  * or alternate commands.
+ *
+ * The key-tap IOCTL accepts exactly one fixed request structure with one
+ * validated key code. The driver maps that key code to USB HID keyboard usage
+ * bytes internally. It does not accept raw HID report bytes, strings, repeats,
+ * batches, shortcuts, or alternate commands.
  *
  * The status IOCTL is read-only. It accepts no input buffer and returns this
  * fixed status structure without arming sequences or submitting reports.
@@ -40,13 +45,22 @@ DEFINE_GUID(
 #define VHID_IOCTL_CLICK_ABSOLUTE \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_WRITE_DATA)
 
+#define VHID_IOCTL_KEY_TAP \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_WRITE_DATA)
+
 #define VHID_COMMAND_NONE 0u
 #define VHID_COMMAND_SMOKE_SEQUENCE 1u
 #define VHID_COMMAND_MOVE_ABSOLUTE 2u
 #define VHID_COMMAND_CLICK_ABSOLUTE 3u
+#define VHID_COMMAND_KEY_TAP 4u
 
 #define VHID_MOVE_ABSOLUTE_COORDINATE_MIN 0u
 #define VHID_MOVE_ABSOLUTE_COORDINATE_MAX 32767u
+
+#define VHID_KEY_TAP_KEY_ENTER 0x100u
+#define VHID_KEY_TAP_KEY_ESCAPE 0x101u
+#define VHID_KEY_TAP_KEY_TAB 0x102u
+#define VHID_KEY_TAP_KEY_BACKSPACE 0x103u
 
 typedef struct _VHID_MOVE_ABSOLUTE_REQUEST {
     ULONG Size;
@@ -75,6 +89,19 @@ typedef struct _VHID_CLICK_ABSOLUTE_REQUEST {
     ULONG Reserved2;
     ULONG Reserved3;
 } VHID_CLICK_ABSOLUTE_REQUEST, *PVHID_CLICK_ABSOLUTE_REQUEST;
+
+typedef struct _VHID_KEY_TAP_REQUEST {
+    ULONG Size;
+    ULONG ProtocolVersionMajor;
+    ULONG ProtocolVersionMinor;
+    ULONG CommandType;
+    ULONG SequenceId;
+    ULONG KeyCode;
+    ULONG Reserved0;
+    ULONG Reserved1;
+    ULONG Reserved2;
+    ULONG Reserved3;
+} VHID_KEY_TAP_REQUEST, *PVHID_KEY_TAP_REQUEST;
 
 typedef struct _VHID_STATUS_REPORT {
     ULONG Size;

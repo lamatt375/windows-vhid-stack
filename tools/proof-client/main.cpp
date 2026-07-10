@@ -117,6 +117,12 @@ static const wchar_t* SequenceStateName(LONG state)
         return L"Failed";
     case 17:
         return L"MoveAbsoluteSubmitting";
+    case 18:
+        return L"ClickAbsoluteMoveSubmitting";
+    case 19:
+        return L"ClickAbsoluteDownSubmitting";
+    case 20:
+        return L"ClickAbsoluteUpSubmitting";
     default:
         return L"Unknown";
     }
@@ -131,6 +137,8 @@ static const wchar_t* CommandTypeName(ULONG commandType)
         return L"SmokeSequence";
     case VHID_COMMAND_MOVE_ABSOLUTE:
         return L"MoveAbsolute";
+    case VHID_COMMAND_CLICK_ABSOLUTE:
+        return L"ClickAbsolute";
     default:
         return L"Unknown";
     }
@@ -236,6 +244,43 @@ static int RunMoveAbsolute(HANDLE device, ULONG x, ULONG y)
     return 0;
 }
 
+
+static int RunClickAbsolute(HANDLE device, ULONG x, ULONG y)
+{
+    VHID_CLICK_ABSOLUTE_REQUEST request;
+    BOOL ok;
+    DWORD bytesReturned;
+
+    ZeroMemory(&request, sizeof(request));
+    request.Size = sizeof(request);
+    request.ProtocolVersionMajor = VHID_PROTOCOL_VERSION_MAJOR;
+    request.ProtocolVersionMinor = VHID_PROTOCOL_VERSION_MINOR;
+    request.CommandType = VHID_COMMAND_CLICK_ABSOLUTE;
+    request.SequenceId = 2;
+    request.X = x;
+    request.Y = y;
+
+    bytesReturned = 0;
+    std::wcout << L"sending click-abs x=" << x << L" y=" << y << L"\n";
+    ok = DeviceIoControl(
+        device,
+        VHID_IOCTL_CLICK_ABSOLUTE,
+        &request,
+        sizeof(request),
+        nullptr,
+        0,
+        &bytesReturned,
+        nullptr);
+
+    if (!ok) {
+        DWORD error = GetLastError();
+        std::wcerr << L"click-abs failed: DeviceIoControl failed, error=" << error << L"\n";
+        return 9;
+    }
+
+    std::wcout << L"click-abs accepted: DeviceIoControl succeeded\n";
+    return 0;
+}
 static int RunStatus(HANDLE device)
 {
     VHID_STATUS_REPORT report;
@@ -298,7 +343,7 @@ static int RunStatus(HANDLE device)
 
 static void PrintUsage()
 {
-    std::wcerr << L"usage: proof-client.exe trigger|status|move-abs <x> <y>\n";
+    std::wcerr << L"usage: proof-client.exe trigger|status|move-abs <x> <y>|click-abs <x> <y>\n";
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -325,10 +370,10 @@ int wmain(int argc, wchar_t** argv)
             PrintUsage();
             return 2;
         }
-    } else if (command == L"move-abs") {
+    } else if (command == L"move-abs" || command == L"click-abs") {
         if (argc != 4 || !ParseCoordinate(argv[2], &x) || !ParseCoordinate(argv[3], &y)) {
             PrintUsage();
-            std::wcerr << L"move-abs coordinates must be decimal values from 0 to "
+            std::wcerr << command << L" coordinates must be decimal values from 0 to "
                        << VHID_MOVE_ABSOLUTE_COORDINATE_MAX << L"\n";
             return 2;
         }
@@ -362,6 +407,8 @@ int wmain(int argc, wchar_t** argv)
         result = RunStatus(device);
     } else if (command == L"move-abs") {
         result = RunMoveAbsolute(device, x, y);
+    } else if (command == L"click-abs") {
+        result = RunClickAbsolute(device, x, y);
     } else {
         result = RunTrigger(device);
     }

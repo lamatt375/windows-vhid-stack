@@ -1,7 +1,7 @@
 #pragma once
 
 #define VHID_PROTOCOL_VERSION_MAJOR 0u
-#define VHID_PROTOCOL_VERSION_MINOR 3u
+#define VHID_PROTOCOL_VERSION_MINOR 4u
 #define VHID_PROJECT_NAME "windows-vhid-stack"
 
 /*
@@ -14,6 +14,11 @@
  * The move-absolute IOCTL accepts exactly one fixed request structure with
  * normalized 0..32767 coordinates. It does not accept raw HID report bytes,
  * click/buttons, text, repeats, batches, or alternate commands.
+ *
+ * The click-absolute IOCTL accepts exactly one fixed request structure with
+ * normalized 0..32767 coordinates and performs one left click only. It does
+ * not accept button selection, raw HID report bytes, text, repeats, batches,
+ * or alternate commands.
  *
  * The status IOCTL is read-only. It accepts no input buffer and returns this
  * fixed status structure without arming sequences or submitting reports.
@@ -32,9 +37,13 @@ DEFINE_GUID(
 #define VHID_IOCTL_MOVE_ABSOLUTE \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_WRITE_DATA)
 
+#define VHID_IOCTL_CLICK_ABSOLUTE \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_WRITE_DATA)
+
 #define VHID_COMMAND_NONE 0u
 #define VHID_COMMAND_SMOKE_SEQUENCE 1u
 #define VHID_COMMAND_MOVE_ABSOLUTE 2u
+#define VHID_COMMAND_CLICK_ABSOLUTE 3u
 
 #define VHID_MOVE_ABSOLUTE_COORDINATE_MIN 0u
 #define VHID_MOVE_ABSOLUTE_COORDINATE_MAX 32767u
@@ -52,6 +61,20 @@ typedef struct _VHID_MOVE_ABSOLUTE_REQUEST {
     ULONG Reserved2;
     ULONG Reserved3;
 } VHID_MOVE_ABSOLUTE_REQUEST, *PVHID_MOVE_ABSOLUTE_REQUEST;
+
+typedef struct _VHID_CLICK_ABSOLUTE_REQUEST {
+    ULONG Size;
+    ULONG ProtocolVersionMajor;
+    ULONG ProtocolVersionMinor;
+    ULONG CommandType;
+    ULONG SequenceId;
+    ULONG X;
+    ULONG Y;
+    ULONG Reserved0;
+    ULONG Reserved1;
+    ULONG Reserved2;
+    ULONG Reserved3;
+} VHID_CLICK_ABSOLUTE_REQUEST, *PVHID_CLICK_ABSOLUTE_REQUEST;
 
 typedef struct _VHID_STATUS_REPORT {
     ULONG Size;

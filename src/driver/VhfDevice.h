@@ -25,7 +25,10 @@ typedef enum _VHID_REPORT_SEQUENCE_STATE {
     VhidReportKeyboardFinalClearSubmitting = 14,
     VhidReportSequenceComplete = 15,
     VhidReportSequenceFailed = 16,
-    VhidReportMoveAbsoluteSubmitting = 17
+    VhidReportMoveAbsoluteSubmitting = 17,
+    VhidReportClickAbsoluteMoveSubmitting = 18,
+    VhidReportClickAbsoluteDownSubmitting = 19,
+    VhidReportClickAbsoluteUpSubmitting = 20
 } VHID_REPORT_SEQUENCE_STATE;
 
 typedef struct _VHID_VHF_CONTEXT {
@@ -45,6 +48,8 @@ typedef struct _VHID_VHF_CONTEXT {
     ULONG LastCommandSequenceId;
     NTSTATUS LastCommandStatus;
     UCHAR AbsoluteMoveReport[VHID_HID_ABSOLUTE_MOUSE_REPORT_LENGTH];
+    UCHAR AbsoluteClickDownReport[VHID_HID_ABSOLUTE_MOUSE_REPORT_LENGTH];
+    UCHAR AbsoluteClickUpReport[VHID_HID_ABSOLUTE_MOUSE_REPORT_LENGTH];
     KSPIN_LOCK SubmissionLock;
     KEVENT NoActiveSubmissionsEvent;
     LONG ActiveSubmissions;
@@ -71,6 +76,12 @@ NTSTATUS
 VhidVhfMoveAbsolute(
     _Inout_ PVHID_VHF_CONTEXT Context,
     _In_ const VHID_MOVE_ABSOLUTE_REQUEST* Request
+    );
+
+NTSTATUS
+VhidVhfClickAbsolute(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ const VHID_CLICK_ABSOLUTE_REQUEST* Request
     );
 
 NTSTATUS

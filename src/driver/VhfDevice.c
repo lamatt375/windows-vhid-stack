@@ -36,6 +36,7 @@ C_ASSERT(sizeof(VhidNeutralMouseReport) == VHID_MOUSE_INPUT_REPORT_LENGTH);
 C_ASSERT(sizeof(VhidMouseMoveRightReport) == VHID_MOUSE_INPUT_REPORT_LENGTH);
 C_ASSERT(VHID_ABSOLUTE_MOUSE_INPUT_REPORT_LENGTH == 6u);
 C_ASSERT(VHID_MOVE_ABSOLUTE_COORDINATE_MAX == VHID_HID_ABSOLUTE_COORDINATE_MAX);
+C_ASSERT(VHID_ABSOLUTE_MOUSE_INPUT_REPORT_LENGTH == VHID_HID_ABSOLUTE_MOUSE_REPORT_LENGTH);
 
 static
 BOOLEAN
@@ -73,7 +74,7 @@ VhidReadUshortLittleEndian(
 
 static
 BOOLEAN
-VhidIsValidAbsoluteMoveReport(
+VhidIsValidAbsoluteReport(
     _In_reads_bytes_(ReportLength) PUCHAR Report,
     _In_ ULONG ReportLength
     )
@@ -85,7 +86,8 @@ VhidIsValidAbsoluteMoveReport(
         return FALSE;
     }
 
-    if (Report[0] != VHID_ABSOLUTE_MOUSE_REPORT_ID || Report[1] != 0x00) {
+    if (Report[0] != VHID_ABSOLUTE_MOUSE_REPORT_ID ||
+        (Report[1] != 0x00 && Report[1] != 0x01)) {
         return FALSE;
     }
 
@@ -98,14 +100,15 @@ VhidIsValidAbsoluteMoveReport(
 
 static
 VOID
-VhidBuildAbsoluteMoveReport(
+VhidBuildAbsoluteReport(
     _Out_writes_bytes_(VHID_ABSOLUTE_MOUSE_INPUT_REPORT_LENGTH) UCHAR* Report,
     _In_ ULONG X,
-    _In_ ULONG Y
+    _In_ ULONG Y,
+    _In_ UCHAR Buttons
     )
 {
     Report[0] = VHID_ABSOLUTE_MOUSE_REPORT_ID;
-    Report[1] = 0x00;
+    Report[1] = Buttons;
     Report[2] = (UCHAR)(X & 0xFFu);
     Report[3] = (UCHAR)((X >> 8) & 0xFFu);
     Report[4] = (UCHAR)(Y & 0xFFu);
@@ -244,7 +247,7 @@ VhidVhfCompleteSubmit(
 
 static
 VOID
-VhidVhfCompleteMoveAbsolute(
+VhidVhfCompleteDirectCommand(
     _Inout_ PVHID_VHF_CONTEXT Context,
     _In_ NTSTATUS Status
     )
@@ -276,6 +279,20 @@ VhidVhfCompleteMoveAbsolute(
     KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
 }
 
+
+static
+VOID
+VhidVhfSetDirectCommandState(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ VHID_REPORT_SEQUENCE_STATE State
+    )
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+    InterlockedExchange(&Context->ReportSequenceState, (LONG)State);
+    KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+}
 static
 NTSTATUS
 VhidVhfSubmitSequencedReport(
@@ -334,7 +351,7 @@ VhidVhfSubmitSequencedReport(
 
 static
 NTSTATUS
-VhidVhfSubmitAbsoluteMoveReport(
+VhidVhfSubmitAbsoluteReport(
     _In_ VHFHANDLE VhfHandle,
     _In_reads_bytes_(ReportLength) PUCHAR Report,
     _In_ ULONG ReportLength
@@ -346,7 +363,7 @@ VhidVhfSubmitAbsoluteMoveReport(
         return STATUS_DEVICE_NOT_READY;
     }
 
-    if (!VhidIsValidAbsoluteMoveReport(Report, ReportLength)) {
+    if (!VhidIsValidAbsoluteReport(Report, ReportLength)) {
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -804,10 +821,11 @@ VhidVhfMoveAbsolute(
                state != (LONG)VhidReportSequenceComplete) {
         status = STATUS_INVALID_DEVICE_STATE;
     } else {
-        VhidBuildAbsoluteMoveReport(
+        VhidBuildAbsoluteReport(
             Context->AbsoluteMoveReport,
             Request->X,
-            Request->Y);
+            Request->Y,
+            0x00);
         Context->LastReportSubmitStatus = STATUS_SUCCESS;
         Context->LastCommandType = VHID_COMMAND_MOVE_ABSOLUTE;
         Context->LastCommandSequenceId = Request->SequenceId;
@@ -850,12 +868,12 @@ VhidVhfMoveAbsolute(
         VHID_ABSOLUTE_MOUSE_REPORT_ID,
         Request->SequenceId);
 
-    status = VhidVhfSubmitAbsoluteMoveReport(
+    status = VhidVhfSubmitAbsoluteReport(
         vhfHandle,
         Context->AbsoluteMoveReport,
         sizeof(Context->AbsoluteMoveReport));
 
-    VhidVhfCompleteMoveAbsolute(Context, status);
+    VhidVhfCompleteDirectCommand(Context, status);
 
     if (!NT_SUCCESS(status)) {
         VHID_LOG_ERROR(
@@ -876,6 +894,247 @@ VhidVhfMoveAbsolute(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+VhidValidateClickAbsoluteRequest(
+    _In_ const VHID_CLICK_ABSOLUTE_REQUEST* Request
+    )
+{
+    if (Request == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Request->Size != sizeof(*Request) ||
+        Request->ProtocolVersionMajor != VHID_PROTOCOL_VERSION_MAJOR ||
+        Request->ProtocolVersionMinor != VHID_PROTOCOL_VERSION_MINOR ||
+        Request->CommandType != VHID_COMMAND_CLICK_ABSOLUTE) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Request->Reserved0 != 0 ||
+        Request->Reserved1 != 0 ||
+        Request->Reserved2 != 0 ||
+        Request->Reserved3 != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Request->X > VHID_MOVE_ABSOLUTE_COORDINATE_MAX ||
+        Request->Y > VHID_MOVE_ABSOLUTE_COORDINATE_MAX) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+VhidVhfClickAbsolute(
+    _Inout_ PVHID_VHF_CONTEXT Context,
+    _In_ const VHID_CLICK_ABSOLUTE_REQUEST* Request
+    )
+{
+    KIRQL oldIrql;
+    LONG state;
+    NTSTATUS status;
+    NTSTATUS retryStatus;
+    VHFHANDLE vhfHandle;
+    BOOLEAN submitReports;
+
+    if (Context == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    status = VhidValidateClickAbsoluteRequest(Request);
+    if (!NT_SUCCESS(status)) {
+        KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+        Context->LastCommandType = (Request != NULL) ? Request->CommandType : VHID_COMMAND_CLICK_ABSOLUTE;
+        Context->LastCommandSequenceId = (Request != NULL) ? Request->SequenceId : 0;
+        Context->LastCommandStatus = status;
+        KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+        VHID_LOG_ERROR(
+            "ClickAbsolute rejected, invalid request status=0x%08X",
+            status);
+        return status;
+    }
+
+    vhfHandle = NULL;
+    submitReports = FALSE;
+
+    KeAcquireSpinLock(&Context->SubmissionLock, &oldIrql);
+
+    state = Context->ReportSequenceState;
+
+    if (Context->Deleting) {
+        status = STATUS_DELETE_PENDING;
+    } else if (!Context->VhfStarted || Context->VhfHandle == NULL) {
+        status = STATUS_DEVICE_NOT_READY;
+    } else if (Context->ReportSubmissionEnabled || Context->ActiveSubmissions > 0) {
+        status = STATUS_DEVICE_BUSY;
+    } else if (state != (LONG)VhidReportSequenceDisabled &&
+               state != (LONG)VhidReportSequenceComplete) {
+        status = STATUS_INVALID_DEVICE_STATE;
+    } else {
+        VhidBuildAbsoluteReport(
+            Context->AbsoluteMoveReport,
+            Request->X,
+            Request->Y,
+            0x00);
+        VhidBuildAbsoluteReport(
+            Context->AbsoluteClickDownReport,
+            Request->X,
+            Request->Y,
+            0x01);
+        VhidBuildAbsoluteReport(
+            Context->AbsoluteClickUpReport,
+            Request->X,
+            Request->Y,
+            0x00);
+        Context->LastReportSubmitStatus = STATUS_SUCCESS;
+        Context->LastCommandType = VHID_COMMAND_CLICK_ABSOLUTE;
+        Context->LastCommandSequenceId = Request->SequenceId;
+        Context->LastCommandStatus = STATUS_PENDING;
+        Context->CurrentCommandType = VHID_COMMAND_CLICK_ABSOLUTE;
+        Context->CurrentCommandSequenceId = Request->SequenceId;
+        Context->ReportSubmissionEnabled = TRUE;
+        Context->ReadyForNextReport = FALSE;
+        InterlockedExchange(
+            &Context->ReportSequenceState,
+            (LONG)VhidReportClickAbsoluteMoveSubmitting);
+        Context->ActiveSubmissions++;
+        KeClearEvent(&Context->NoActiveSubmissionsEvent);
+        vhfHandle = Context->VhfHandle;
+        submitReports = TRUE;
+        status = STATUS_SUCCESS;
+    }
+
+    if (!submitReports) {
+        Context->LastCommandType = VHID_COMMAND_CLICK_ABSOLUTE;
+        Context->LastCommandSequenceId = Request->SequenceId;
+        Context->LastCommandStatus = status;
+    }
+
+    KeReleaseSpinLock(&Context->SubmissionLock, oldIrql);
+
+    if (!submitReports) {
+        VHID_LOG_ERROR(
+            "ClickAbsolute rejected, x=%lu y=%lu status=0x%08X",
+            Request->X,
+            Request->Y,
+            status);
+        return status;
+    }
+
+    VHID_LOG_INFO(
+        "ClickAbsolute move submit attempt, x=%lu y=%lu reportId=%u sequenceId=%lu",
+        Request->X,
+        Request->Y,
+        VHID_ABSOLUTE_MOUSE_REPORT_ID,
+        Request->SequenceId);
+
+    status = VhidVhfSubmitAbsoluteReport(
+        vhfHandle,
+        Context->AbsoluteMoveReport,
+        sizeof(Context->AbsoluteMoveReport));
+    if (!NT_SUCCESS(status)) {
+        VhidVhfCompleteDirectCommand(Context, status);
+        VHID_LOG_ERROR(
+            "ClickAbsolute move submit failed, x=%lu y=%lu status=0x%08X",
+            Request->X,
+            Request->Y,
+            status);
+        return status;
+    }
+
+    VhidVhfSetDirectCommandState(
+        Context,
+        VhidReportClickAbsoluteDownSubmitting);
+
+    VHID_LOG_INFO(
+        "ClickAbsolute left-button down submit attempt, x=%lu y=%lu reportId=%u sequenceId=%lu",
+        Request->X,
+        Request->Y,
+        VHID_ABSOLUTE_MOUSE_REPORT_ID,
+        Request->SequenceId);
+
+    status = VhidVhfSubmitAbsoluteReport(
+        vhfHandle,
+        Context->AbsoluteClickDownReport,
+        sizeof(Context->AbsoluteClickDownReport));
+    if (!NT_SUCCESS(status)) {
+        VhidVhfCompleteDirectCommand(Context, status);
+        VHID_LOG_ERROR(
+            "ClickAbsolute left-button down submit failed, x=%lu y=%lu status=0x%08X",
+            Request->X,
+            Request->Y,
+            status);
+        return status;
+    }
+
+    VhidVhfSetDirectCommandState(
+        Context,
+        VhidReportClickAbsoluteUpSubmitting);
+
+    VHID_LOG_INFO(
+        "ClickAbsolute left-button up submit attempt, x=%lu y=%lu reportId=%u sequenceId=%lu",
+        Request->X,
+        Request->Y,
+        VHID_ABSOLUTE_MOUSE_REPORT_ID,
+        Request->SequenceId);
+
+    status = VhidVhfSubmitAbsoluteReport(
+        vhfHandle,
+        Context->AbsoluteClickUpReport,
+        sizeof(Context->AbsoluteClickUpReport));
+
+    if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR(
+            "ClickAbsolute left-button up submit failed, attempting emergency neutral retry, x=%lu y=%lu status=0x%08X",
+            Request->X,
+            Request->Y,
+            status);
+
+        retryStatus = VhidVhfSubmitAbsoluteReport(
+            vhfHandle,
+            Context->AbsoluteClickUpReport,
+            sizeof(Context->AbsoluteClickUpReport));
+
+        if (NT_SUCCESS(retryStatus)) {
+            VHID_LOG_INFO(
+                "ClickAbsolute emergency neutral retry completed, x=%lu y=%lu reportId=%u sequenceId=%lu",
+                Request->X,
+                Request->Y,
+                VHID_ABSOLUTE_MOUSE_REPORT_ID,
+                Request->SequenceId);
+            status = STATUS_SUCCESS;
+        } else {
+            VHID_LOG_ERROR(
+                "ClickAbsolute emergency neutral retry failed, x=%lu y=%lu status=0x%08X",
+                Request->X,
+                Request->Y,
+                retryStatus);
+            status = retryStatus;
+        }
+    }
+
+    VhidVhfCompleteDirectCommand(Context, status);
+
+    if (!NT_SUCCESS(status)) {
+        VHID_LOG_ERROR(
+            "ClickAbsolute left-button up submit failed after emergency neutral retry, x=%lu y=%lu status=0x%08X",
+            Request->X,
+            Request->Y,
+            status);
+        return status;
+    }
+
+    VHID_LOG_INFO(
+        "ClickAbsolute completed, x=%lu y=%lu reportId=%u sequenceId=%lu",
+        Request->X,
+        Request->Y,
+        VHID_ABSOLUTE_MOUSE_REPORT_ID,
+        Request->SequenceId);
+
+    return STATUS_SUCCESS;
+}
 NTSTATUS
 VhidVhfQueryStatus(
     _Inout_ PVHID_VHF_CONTEXT Context,

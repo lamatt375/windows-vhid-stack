@@ -9,9 +9,10 @@ Current boundaries:
 - one no-payload IOCTL can kickstart the fixed sequence once with the first neutral report; later VHF ready callbacks submit reports 2-7;
 - the only keyboard press is one `A` press followed by keyboard release;
 - the only mouse movement is one relative X +1 report followed by mouse neutral clear;
-- no mouse button, click, arbitrary movement, or wheel reports;
+- one fixed `ClickAbsolute(x,y)` path can submit an absolute left-button click after explicit proof-client request;
+- no right click, double click, drag, arbitrary button values, arbitrary movement, or wheel reports;
 - no arbitrary key API or repeated key path;
-- no IOCTL queue accepting HID report bytes, key codes, text, coordinates, click flags, repeat counts, or arbitrary commands;
+- no IOCTL queue accepting HID report bytes, key codes, text, arbitrary payloads, click flags, repeat counts, or arbitrary commands;
 - no install/load instructions;
 - no build approval implied by these files.
 

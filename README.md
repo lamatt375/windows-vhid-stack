@@ -12,12 +12,14 @@ Current status: source skeleton with minimal VHF lifecycle, HID descriptor, one 
 - No driver/sample build without explicit approval.
 - No signing, certificate changes, TESTSIGNING changes, reboot, install/load/unload, driver-store operations, or expanded report-write behavior without explicit approval.
 - Runtime testing should happen only in an isolated VM/lab environment after source review and an approved public push.
+- Dev/test install helpers default to dry-run and require explicit opt-in before package/sign/install or removal actions.
 
 ## Repository Layout
 
 ```text
 src/driver/           KMDF/VHF driver skeleton with descriptor and fixed reports
 src/shared/           Shared descriptor and fixed trigger identity
+tools/dev/            Dry-run-first dev/test package, install, uninstall, and status helpers
 tools/proof-client/   Minimal status, smoke trigger, move-abs, click-abs, and keytap helper
 tests/                Descriptor validation and placeholder README files
 ```
@@ -35,7 +37,7 @@ The driver skeleton intentionally has only a narrow fixed trigger and report pat
 - no right click, double click, drag, wheel, arbitrary button values, or click repeat behavior;
 - no IOCTL carrying HID report bytes, raw key usages, text strings, arbitrary payloads, repeat counts, or arbitrary commands;
 - no user-mode input fallback;
-- no install/load scripts.
+- no production installer or automatic install/load behavior.
 
 Before any approved VM execution, use a known keyboard layout, keep Caps Lock off, disable IME/composition, focus a blank disposable text field, submit press/release without observation delay while the key is down, and fail the test on uppercase, wrong, composed, repeated, or multiple characters.
 

@@ -6,7 +6,7 @@ Signature="$WINDOWS NT$"
 Class=HIDClass
 ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
 Provider=%ManufacturerName%
-DriverVer=07/02/2026,0.0.2.0
+DriverVer=07/10/2026,0.0.3.0
 CatalogFile=VirtualInput.cat
 PnpLockdown=1
 

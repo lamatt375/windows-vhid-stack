@@ -13,6 +13,7 @@ Current status: source skeleton with minimal VHF lifecycle, HID descriptor, one 
 - No signing, certificate changes, TESTSIGNING changes, reboot, install/load/unload, driver-store operations, or expanded report-write behavior without explicit approval.
 - Runtime testing should happen only in an isolated VM/lab environment after source review and an approved public push.
 - Dev/test install helpers default to dry-run and require explicit opt-in before package/sign/install or removal actions.
+- Use the `tools/dev/*.cmd` wrappers on Windows when execution policy blocks direct `.ps1` script launches; the wrappers apply a process-local policy bypass for the matching helper only.
 
 ## Repository Layout
 

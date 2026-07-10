@@ -1,12 +1,14 @@
 # Dev/Test Packaging Helpers
 
-This folder contains conservative PowerShell helpers for reviewed isolated VM development. They are not production installers.
+This folder contains conservative helpers for reviewed isolated VM development. They are not production installers.
+
+Prefer the `.cmd` wrappers on Windows. They launch the matching PowerShell script with a process-local execution-policy bypass so a default Windows policy does not block local dev scripts.
 
 ## Scripts
 
-- `Install-VhidDev.ps1` performs preflight checks, then can regenerate the catalog, sign the built package with an existing test certificate, install/update the package, and run `proof-client status`.
-- `Uninstall-VhidDev.ps1` lists matching devices and driver packages by default, and removes only explicit selected targets when `-Apply` and removal switches are supplied.
-- `Test-VhidStatus.ps1` runs read-only device inventory and `proof-client status`. It does not send move, click, keytap, trigger, or raw HID commands.
+- `Install-VhidDev.cmd` / `Install-VhidDev.ps1` perform preflight checks, then can regenerate the catalog, sign the built package with an existing test certificate, install/update the package, and run `proof-client status`.
+- `Uninstall-VhidDev.cmd` / `Uninstall-VhidDev.ps1` list matching devices and driver packages by default, and remove only explicit selected targets when `-Apply` and removal switches are supplied.
+- `Test-VhidStatus.cmd` / `Test-VhidStatus.ps1` run read-only device inventory and `proof-client status`. They do not send move, click, keytap, trigger, or raw HID commands.
 
 ## Safety Defaults
 
@@ -19,11 +21,13 @@ This folder contains conservative PowerShell helpers for reviewed isolated VM de
 ## Typical Reviewed VM Flow
 
 ```powershell
-.\tools\dev\Install-VhidDev.ps1
-.\tools\dev\Install-VhidDev.ps1 -Apply
-.\tools\dev\Test-VhidStatus.ps1
-.\tools\dev\Uninstall-VhidDev.ps1
-.\tools\dev\Uninstall-VhidDev.ps1 -RemovePackage -PublishedName oemNN.inf -Apply
+.\tools\dev\Install-VhidDev.cmd
+.\tools\dev\Install-VhidDev.cmd -Apply
+.\tools\dev\Test-VhidStatus.cmd
+.\tools\dev\Uninstall-VhidDev.cmd
+.\tools\dev\Uninstall-VhidDev.cmd -RemovePackage -PublishedName oemNN.inf -Apply
 ```
 
 Review the dry-run logs and replace `oemNN.inf` only after confirming it is the Windows VHID Stack package selected for removal.
+
+The .cmd wrappers are the portable Windows entrypoint.

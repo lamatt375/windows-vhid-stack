@@ -145,6 +145,46 @@ function Invoke-LoggedCommand {
     return $exitCode
 }
 
+function Invoke-PnPUtilInstallDriver {
+    param(
+        [Parameter(Mandatory = $true)][string]$PnpUtilPath,
+        [Parameter(Mandatory = $true)][string]$InstallInfPath
+    )
+
+    $arguments = @('/add-driver', $InstallInfPath, '/install')
+    $display = "$PnpUtilPath $($arguments -join ' ')"
+    if ($DryRun) {
+        Write-Log "DRY-RUN: would run: $display"
+        return 0
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($display, 'Run dev/test staged package install action')) {
+        Write-Log "Skipped by ShouldProcess: $display"
+        return 0
+    }
+
+    Write-Log "RUN: $display"
+    $output = & $PnpUtilPath @arguments 2>&1
+    $exitCode = $LASTEXITCODE
+    foreach ($line in $output) { Write-Log "  $line" }
+    Write-Log "ExitCode=$exitCode"
+
+    if ($exitCode -eq 0) { return 0 }
+
+    $joinedOutput = ($output | Out-String)
+    $alreadyCurrent =
+        $exitCode -eq 259 -and
+        $joinedOutput -match 'Driver package is up-to-date on device' -and
+        $joinedOutput -match 'Added driver packages:\s*0'
+
+    if ($alreadyCurrent) {
+        Write-Log 'pnputil reported the staged driver package is already current on the device; continuing to required status verification.'
+        return $exitCode
+    }
+
+    throw "pnputil install failed with exit code $exitCode`: $display"
+}
+
 function Assert-SafePackageRoot {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -307,7 +347,7 @@ if (-not $SkipSigning) {
 
 if (-not $SkipInstall) {
     if ($pnputil) {
-        Invoke-LoggedCommand -FilePath $pnputil -Arguments @('/add-driver', $StagedInfPath, '/install') -MutatesSystem | Out-Null
+        Invoke-PnPUtilInstallDriver -PnpUtilPath $pnputil -InstallInfPath $StagedInfPath | Out-Null
     } else {
         Write-Log "DRY-RUN: would install/update package from staged INF=$StagedInfPath"
     }

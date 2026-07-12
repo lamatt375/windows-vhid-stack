@@ -18,6 +18,7 @@ Prefer the `.cmd` wrappers on Windows. They launch the matching PowerShell scrip
 - The expected root-enumerated device instance is `ROOT\WINDOWSVHIDSTACKVIRTUALINPUT\0000`.
 - Mutating actions require explicit parameters and are guarded by PowerShell `ShouldProcess`.
 - `Install-VhidDev.ps1` copies only `VirtualInput.inf` and the built `VirtualInput.sys` into the staging directory before running Inf2Cat, so build output folders under `src\driver` are not scanned as package inputs.
+- If `pnputil /add-driver /install` reports the staged package is already current on the device, install continues only to the required status verification step.
 - These scripts do not create certificates, enable TESTSIGNING, reboot, or run generated input tests.
 
 ## Typical Reviewed VM Flow

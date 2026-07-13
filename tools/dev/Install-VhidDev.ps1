@@ -9,6 +9,7 @@ param(
     [string]$CatPath,
     [string]$PackageRoot,
     [string]$ProofClientPath,
+    [string]$DevConPath,
     [string]$CertificateSubject = 'Windows VHID Stack Test Certificate',
     [string]$DeviceInstanceId = 'ROOT\WINDOWSVHIDSTACKVIRTUALINPUT\0000',
     [string]$Inf2CatOs = '10_X64',
@@ -17,6 +18,7 @@ param(
     [switch]$SkipCatalog,
     [switch]$SkipSigning,
     [switch]$SkipInstall,
+    [switch]$SkipDeviceCreate,
     [switch]$SkipStatus
 )
 
@@ -28,6 +30,7 @@ if (-not $InfPath) { $InfPath = Join-Path $DriverRoot 'VirtualInput.inf' }
 if (-not $SysPath) { $SysPath = Join-Path $DriverRoot 'x64\Debug\VirtualInput.sys' }
 if (-not $PackageRoot) { $PackageRoot = 'C:\vhid-lab\pkg\windows-vhid-stack' }
 if (-not $ProofClientPath) { $ProofClientPath = Join-Path $RepoRoot 'tools\proof-client\x64\Debug\proof-client.exe' }
+$RootDeviceHardwareId = 'ROOT\WindowsVhidStackVirtualInput'
 
 
 $DryRun = -not $Apply
@@ -93,6 +96,30 @@ function Find-Tool {
             Select-Object -First 1
         if ($match) { return $match.FullName }
     }
+
+    return $null
+}
+
+
+function Find-DevConTool {
+    if ($DevConPath) {
+        if (-not (Test-Path -LiteralPath $DevConPath)) { throw "Provided -DevConPath was not found: $DevConPath" }
+        return (Resolve-Path -LiteralPath $DevConPath).Path
+    }
+
+    $roots = @($env:WindowsSdkDir, $env:WDKContentRoot, 'C:\\Program Files (x86)\\Windows Kits\\10', 'C:\\Program Files\\Windows Kits\\10') |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_) } |
+        Select-Object -Unique
+    $matches = @()
+    foreach ($root in $roots) {
+        $matches += Get-ChildItem -LiteralPath $root -Filter 'devcon.exe' -Recurse -ErrorAction SilentlyContinue
+    }
+
+    $x64 = $matches | Where-Object { $_.FullName -match '[\\/]x64[\\/]devcon\.exe$' } | Sort-Object FullName -Descending | Select-Object -First 1
+    if ($x64) { return $x64.FullName }
+
+    $any = $matches | Sort-Object FullName -Descending | Select-Object -First 1
+    if ($any) { return $any.FullName }
 
     return $null
 }
@@ -183,6 +210,35 @@ function Invoke-PnPUtilInstallDriver {
     }
 
     throw "pnputil install failed with exit code $exitCode`: $display"
+}
+
+
+function Test-VhidDevicePresent {
+    param([Parameter(Mandatory = $true)][string]$InstanceId)
+
+    $output = & pnputil.exe /enum-devices /instanceid $InstanceId 2>&1
+    $exitCode = $LASTEXITCODE
+    foreach ($line in $output) { Write-Log "  device-check $line" }
+    Write-Log "DeviceCheckExitCode=$exitCode"
+    $joined = ($output | Out-String)
+
+    if ($exitCode -ne 0) {
+        throw "Failed to enumerate expected root device $InstanceId before DevCon repair; refusing to create device on ambiguous inventory failure."
+    }
+    if ($joined -match [regex]::Escape($InstanceId)) { return $true }
+    if ($joined -match 'No devices were found on the system') { return $false }
+
+    throw "Unexpected pnputil device inventory output for $InstanceId; refusing to create device on ambiguous inventory result."
+}
+
+function Invoke-DevConInstallRootDevice {
+    param(
+        [Parameter(Mandatory = $true)][string]$DevConExe,
+        [Parameter(Mandatory = $true)][string]$InstallInfPath,
+        [Parameter(Mandatory = $true)][string]$HardwareId
+    )
+
+    Invoke-LoggedCommand -FilePath $DevConExe -Arguments @('install', $InstallInfPath, $HardwareId) -MutatesSystem | Out-Null
 }
 
 function Assert-SafePackageRoot {
@@ -296,9 +352,11 @@ if (-not (Test-Path -LiteralPath $SysPath)) {
 $inf2cat = Find-Tool -Name 'inf2cat.exe'
 $signtool = Find-Tool -Name 'signtool.exe'
 $pnputil = Find-Tool -Name 'pnputil.exe'
+$DevConPath = Find-DevConTool
 Write-Log "inf2cat=$inf2cat"
 Write-Log "signtool=$signtool"
 Write-Log "pnputil=$pnputil"
+Write-Log "devcon=$DevConPath"
 
 if (-not $SkipCatalog -and -not $inf2cat) {
     if ($Apply) { throw 'inf2cat.exe was not found. Run from a WDK/EWDK environment or add it to PATH.' }
@@ -350,6 +408,22 @@ if (-not $SkipInstall) {
         Invoke-PnPUtilInstallDriver -PnpUtilPath $pnputil -InstallInfPath $StagedInfPath | Out-Null
     } else {
         Write-Log "DRY-RUN: would install/update package from staged INF=$StagedInfPath"
+    }
+
+    if (-not $SkipDeviceCreate) {
+        if ($DryRun) {
+            Write-Log "DRY-RUN: would verify root device exists and create it if missing: $RootDeviceHardwareId"
+        } elseif (-not (Test-VhidDevicePresent -InstanceId $DeviceInstanceId)) {
+            if (-not $DevConPath) {
+                throw 'Root devnode is missing and devcon.exe was not found. Run from a WDK/EWDK environment or pass -DevConPath.'
+            }
+            Write-Log "Root devnode missing after package install; creating dev/test root device HardwareId=$RootDeviceHardwareId"
+            Invoke-DevConInstallRootDevice -DevConExe $DevConPath -InstallInfPath $StagedInfPath -HardwareId $RootDeviceHardwareId
+        } else {
+            Write-Log "Root devnode already present: $DeviceInstanceId"
+        }
+    } else {
+        Write-Log 'Skipping root devnode create/repair because -SkipDeviceCreate was supplied.'
     }
 }
 

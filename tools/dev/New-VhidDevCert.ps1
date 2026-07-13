@@ -67,6 +67,12 @@ function Import-CertificateIfNeeded {
         [Parameter(Mandatory = $true)][string]$Thumbprint
     )
 
+    $storeName = switch ($StoreLocation) {
+        'Cert:\LocalMachine\Root' { 'Root'; break }
+        'Cert:\LocalMachine\TrustedPublisher' { 'TrustedPublisher'; break }
+        default { throw "Unsupported trust store location: $StoreLocation" }
+    }
+
     $existing = Get-ChildItem -LiteralPath $StoreLocation -ErrorAction Stop |
         Where-Object { $_.Thumbprint -eq $Thumbprint } |
         Select-Object -First 1
@@ -76,16 +82,35 @@ function Import-CertificateIfNeeded {
     }
 
     if ($DryRun) {
-        Write-Log "DRY-RUN: would import $CertificatePath into $StoreLocation"
+        Write-Log "DRY-RUN: would import $CertificatePath into $StoreLocation using certutil store $storeName"
         return
     }
 
-    if (-not $PSCmdlet.ShouldProcess($StoreLocation, "Import VHID dev certificate $Thumbprint")) {
+    if (-not $PSCmdlet.ShouldProcess($StoreLocation, "Import VHID dev certificate $Thumbprint using certutil")) {
         Write-Log "Skipped certificate import into $StoreLocation by ShouldProcess."
         return
     }
 
-    Import-Certificate -FilePath $CertificatePath -CertStoreLocation $StoreLocation | Out-Null
+    $certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
+    if (-not (Test-Path -LiteralPath $certutil)) { throw "certutil.exe was not found at $certutil" }
+
+    Write-Log "RUN: $certutil -addstore -f $storeName $CertificatePath"
+    $output = & $certutil -addstore -f $storeName $CertificatePath 2>&1
+    $exitCode = $LASTEXITCODE
+    foreach ($line in $output) {
+        Write-Log ("  {0}" -f $line)
+    }
+    if ($exitCode -ne 0) {
+        throw "certutil failed with exit code $exitCode while importing $Thumbprint into $StoreLocation"
+    }
+
+    $imported = Get-ChildItem -LiteralPath $StoreLocation -ErrorAction Stop |
+        Where-Object { $_.Thumbprint -eq $Thumbprint } |
+        Select-Object -First 1
+    if (-not $imported) {
+        throw "Certificate $Thumbprint was not found in $StoreLocation after certutil import."
+    }
+
     Write-Log "Imported certificate $Thumbprint into $StoreLocation"
 }
 
